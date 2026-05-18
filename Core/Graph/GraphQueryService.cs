@@ -30,6 +30,8 @@ public sealed class GraphQueryService
     public GraphNode? GetNode(string methodId) =>
         _index.Nodes.TryGetValue(methodId, out var node) ? node : null;
 
+    public IEnumerable<GraphNode> GetAllNodes() => _index.Nodes.Values;
+
     /// <summary>谁调用了该方法？（上游 B ← A 中的 A）</summary>
     public IReadOnlyList<string> GetCallers(string methodId)
     {
@@ -220,6 +222,20 @@ public sealed class GraphQueryService
             .Where(n => n.Attributes.ContainsKey("aspnet-route:entry-point"))
             .Select(n => n.Id)
             .ToList();
+    }
+
+    public EdgeInfo? GetEdgeInfo(string fromId, string toId)
+    {
+        if (!_index.EdgeIdx.OutgoingByKind.TryGetValue(fromId, out var edges))
+            return null;
+
+        foreach (var edge in edges)
+        {
+            if (edge.ToId == toId)
+                return edge;
+        }
+
+        return null;
     }
 
     private void WalkBack(string current, HashSet<string> entryPoints, HashSet<string> visiting)

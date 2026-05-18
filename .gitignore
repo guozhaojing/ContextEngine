@@ -6,3 +6,5 @@ obj/
 *.suo
 scan-*.json
 graph-*.json
+/export/
+/viewer/
