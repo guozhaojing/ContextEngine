@@ -1,6 +1,9 @@
 using Core.Context.Assembly;
 using Core.Context.Export;
 using Core.Context.Models;
+using Core.Prompting;
+using Core.Prompting.Export;
+using Core.Prompting.Models;
 using Core.Retrieval.Embedding;
 using Core.Retrieval.Retrieval;
 
@@ -80,6 +83,19 @@ public sealed class ContextAssembler
         var structured = _pipelineAssembler.Assemble(retrievalResult);
         var exportService = new ContextExportService();
         return await exportService.SaveAsync(structured, outputDirectory, ct);
+    }
+
+    public async Task<string> ExportPromptContextAsync(
+        RetrievalResult retrievalResult,
+        PromptAssemblyOptions? promptOptions = null,
+        string? outputDirectory = null,
+        CancellationToken ct = default)
+    {
+        var structured = _pipelineAssembler.Assemble(retrievalResult);
+        var assembler = new PromptAssembler(promptOptions);
+        var promptContext = assembler.Assemble(structured, retrievalResult);
+        var exportService = new PromptExportService(promptOptions);
+        return await exportService.SaveMarkdownAsync(promptContext, outputDirectory, ct);
     }
 
     private static ContextSection? TruncateSection(ContextSection section, int maxTokens)
