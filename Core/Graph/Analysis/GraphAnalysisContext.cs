@@ -1,3 +1,10 @@
+// =============================================================================
+// Graph/Analysis/GraphAnalysisContext.cs — 分析器执行上下文（只读 + 结果收集）
+// =============================================================================
+// 分析器通过 AddFact / AddAnnotation / AddExtraEdge 写入 Result，
+// 不得直接修改 BaseGraph 中的 GraphNode。
+// =============================================================================
+
 using Core.Models;
 using Core.Scanning;
 
@@ -6,8 +13,7 @@ namespace Core.Graph.Analysis;
 /// <summary>
 /// 分析器只读上下文：提供扫描结果与基础图快照，分析产出写入 <see cref="Result"/>。
 /// </summary>
-public sealed class GraphAnalysisContext
-{
+public sealed class GraphAnalysisContext{
     private GraphAnalysisContext(
         SolutionScanResult scan,
         IGraphSnapshot baseGraph,

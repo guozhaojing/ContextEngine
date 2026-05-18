@@ -1,3 +1,14 @@
+// =============================================================================
+// Scanning/ProjectCodeScanner.cs — 项目源码扫描器
+// =============================================================================
+// 职责：
+//   1. 枚举每个项目下的 .cs 文件
+//   2. 用 SyntaxTree 解析类与方法
+//   3. 用 SemanticModel + InvocationSemanticResolver 解析方法内的调用
+//   4. 输出 CodeUnit 列表
+// 注意：此处不做图构建，不做图查询。
+// =============================================================================
+
 using Core.Graph.Identity;
 using Core.Models;
 using Core.Semantics;
@@ -12,6 +23,9 @@ public class ProjectCodeScanner
     private static readonly HashSet<string> ExcludedDirectoryNames =
         new(StringComparer.OrdinalIgnoreCase) { "bin", "obj", ".git", ".vs", "node_modules" };
 
+    /// <summary>
+    /// 扫描指定路径（目录 / .sln / .csproj），返回所有方法的 CodeUnit。
+    /// </summary>
     public async Task<SolutionScanResult> ScanAsync(
         string path,
         CancellationToken cancellationToken = default)
@@ -24,6 +38,7 @@ public class ProjectCodeScanner
         if (projects.Count == 0)
             throw new InvalidOperationException($"No .csproj found under: {scanRoot}");
 
+        // MSBuild 提供完整 SemanticModel；失败时回退到单文件编译
         await using var semanticProvider = new ProjectSemanticModelProvider();
 
         foreach (var project in projects)
@@ -60,6 +75,8 @@ public class ProjectCodeScanner
                     semanticModel));
             }
 
+            group.CodeUnits = MergeDuplicateCodeUnits(group.CodeUnits);
+
             result.Projects.Add(group);
         }
 
@@ -95,6 +112,9 @@ public class ProjectCodeScanner
         return false;
     }
 
+    /// <summary>
+    /// 从一个语法树中提取所有 class 下的 method，并解析其内部调用。
+    /// </summary>
     private static IEnumerable<CodeUnit> ExtractCodeUnits(
         SyntaxNode root,
         string filePath,
@@ -136,6 +156,9 @@ public class ProjectCodeScanner
         }
     }
 
+    /// <summary>
+    /// 遍历方法体内的 InvocationExpressionSyntax，逐个做语义解析。
+    /// </summary>
     private static List<ResolvedMethodInfo> ExtractResolvedInvocations(
         MethodDeclarationSyntax method,
         SemanticModel semanticModel)
@@ -167,6 +190,7 @@ public class ProjectCodeScanner
         return string.Join(".", parts);
     }
 
+    /// <summary>支持嵌套类：Outer.Inner</summary>
     private static string GetTypeName(TypeDeclarationSyntax type)
     {
         var names = new List<string>();
@@ -185,5 +209,59 @@ public class ProjectCodeScanner
             return method.ExpressionBody.ToString();
 
         return "";
+    }
+
+    private static List<CodeUnit> MergeDuplicateCodeUnits(List<CodeUnit> units)
+    {
+        if (units.Count <= 1)
+            return units;
+
+        var merged = new List<CodeUnit>(units.Count);
+        var seen = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        foreach (var unit in units)
+        {
+            if (seen.TryGetValue(unit.Id, out var index))
+            {
+                var existing = merged[index];
+                MergeInto(existing, unit);
+            }
+            else
+            {
+                seen[unit.Id] = merged.Count;
+                merged.Add(unit);
+            }
+        }
+
+        return merged;
+    }
+
+    private static void MergeInto(CodeUnit target, CodeUnit source)
+    {
+        if (string.IsNullOrEmpty(target.Content) && !string.IsNullOrEmpty(source.Content))
+        {
+            target.Content = source.Content;
+            target.FilePath = source.FilePath;
+            target.RelativeFilePath = source.RelativeFilePath;
+        }
+
+        foreach (var call in source.ResolvedCalls)
+        {
+            var key = $"{call.Namespace}|{call.ClassName}|{call.MethodName}|{call.IsExternal}";
+            if (!target.ResolvedCalls.Any(c =>
+                c.Namespace == call.Namespace &&
+                c.ClassName == call.ClassName &&
+                c.MethodName == call.MethodName &&
+                c.IsExternal == call.IsExternal))
+            {
+                target.ResolvedCalls.Add(call);
+            }
+        }
+
+        foreach (var call in source.Calls)
+        {
+            if (!target.Calls.Contains(call, StringComparer.Ordinal))
+                target.Calls.Add(call);
+        }
     }
 }

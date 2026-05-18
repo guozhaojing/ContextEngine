@@ -1,3 +1,7 @@
+// =============================================================================
+// Graph/Analysis/GraphExtraEdge.cs — 分析器产生的额外边（非 Roslyn call 边）
+// =============================================================================
+
 namespace Core.Graph.Analysis;
 
 public sealed class GraphExtraEdge

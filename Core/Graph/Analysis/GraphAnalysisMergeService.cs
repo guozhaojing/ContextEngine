@@ -1,7 +1,17 @@
+// =============================================================================
+// Graph/Analysis/GraphAnalysisMergeService.cs — 将分析结果合并进图（唯一写入入口）
+// =============================================================================
+// 合并后重新物化 CalledBy 并重建 GraphIndex。
+// 增量模式：先按 analyzer + sourceFile 删除旧贡献，再写入新结果。
+// =============================================================================
+
 using Core.Graph.Indexing;
 
 namespace Core.Graph.Analysis;
 
+/// <summary>
+/// 把 Facts / Annotations / ExtraEdges 合并到 CodeGraph 的副本中。
+/// </summary>
 public sealed class GraphAnalysisMergeService
 {
     public CodeGraphBuildResult Merge(

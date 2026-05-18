@@ -1,3 +1,7 @@
+// =============================================================================
+// Graph/Analysis/GraphAnalysisRunResult.cs — 管道执行后的汇总
+// =============================================================================
+
 namespace Core.Graph.Analysis;
 
 public sealed class GraphAnalysisRunResult

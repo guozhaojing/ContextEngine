@@ -1,10 +1,14 @@
+// =============================================================================
+// Graph/Building/SemanticCallTargetResolver.cs
+// =============================================================================
+// 将扫描阶段的 ResolvedMethodInfo 转为图中的目标 MethodId。
+// 仅用于 CodeGraphBuilder，不含查询逻辑。
+// =============================================================================
+
 using Core.Semantics;
 
 namespace Core.Graph.Building;
 
-/// <summary>
-/// 将语义解析结果映射为图中的目标 MethodId（仅用于构建阶段，不含查询逻辑）。
-/// </summary>
 internal sealed class SemanticCallTargetResolver
 {
     private readonly MethodRegistry _registry;

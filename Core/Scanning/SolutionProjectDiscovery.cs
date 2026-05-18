@@ -1,3 +1,10 @@
+// =============================================================================
+// Scanning/SolutionProjectDiscovery.cs — 发现解决方案中的所有项目
+// =============================================================================
+// 支持输入：目录、.sln 文件、单个 .csproj 文件。
+// 会跳过 bin/obj/.git 等目录。
+// =============================================================================
+
 using System.Text.RegularExpressions;
 
 namespace Core.Scanning;
@@ -7,10 +14,14 @@ public static class SolutionProjectDiscovery
     private static readonly HashSet<string> ExcludedDirectoryNames =
         new(StringComparer.OrdinalIgnoreCase) { "bin", "obj", ".git", ".vs", "node_modules" };
 
+    // 匹配 .sln 中的项目行：Project(...) = "Name", "path\\proj.csproj", "{guid}"
     private static readonly Regex SolutionProjectLineRegex = new(
         @"^Project\(""{[^""]+}""\)\s*=\s*""([^""]+)"",\s*""([^""]+)"",\s*""\{[^""]+\}""",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    /// <summary>
+    /// 根据路径发现所有待扫描的 csproj 项目。
+    /// </summary>
     public static IReadOnlyList<DiscoveredProject> Discover(string path)
     {
         if (File.Exists(path))
@@ -35,6 +46,7 @@ public static class SolutionProjectDiscovery
 
     private static IReadOnlyList<DiscoveredProject> DiscoverFromDirectory(string directory)
     {
+        // 优先：目录下有 .sln 则解析解决方案
         var solutionFiles = EnumerateFiles(directory, "*.sln").ToList();
         if (solutionFiles.Count > 0)
         {
@@ -45,6 +57,7 @@ public static class SolutionProjectDiscovery
             return DeduplicateProjects(projects);
         }
 
+        // 否则：递归查找所有 .csproj
         var projectFiles = EnumerateFiles(directory, "*.csproj")
             .Select(ToDiscoveredProject)
             .ToList();
@@ -68,6 +81,7 @@ public static class SolutionProjectDiscovery
                 .Replace('\\', Path.DirectorySeparatorChar)
                 .Replace('/', Path.DirectorySeparatorChar);
 
+            // 跳过 solution folder 等非 csproj 条目
             if (!projectRelativePath.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
                 continue;
 
@@ -91,6 +105,7 @@ public static class SolutionProjectDiscovery
         return new DiscoveredProject(Path.GetFileNameWithoutExtension(fullPath), fullPath, projectDirectory);
     }
 
+    /// <summary>同一 csproj 被多个 sln 引用时只保留一份。</summary>
     private static IReadOnlyList<DiscoveredProject> DeduplicateProjects(IEnumerable<DiscoveredProject> projects) =>
         projects
             .GroupBy(p => p.ProjectFilePath, StringComparer.OrdinalIgnoreCase)

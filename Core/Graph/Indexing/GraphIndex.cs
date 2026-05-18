@@ -1,10 +1,13 @@
+// =============================================================================
+// Graph/Indexing/GraphIndex.cs — 邻接表索引（供查询层只读使用）
+// =============================================================================
+// GraphQueryService 只依赖本类，不直接遍历 CodeGraph.Edges。
+// =============================================================================
+
 using Core.Graph;
 
 namespace Core.Graph.Indexing;
 
-/// <summary>
-/// 内存邻接索引：查询层唯一依赖的图遍历数据结构。
-/// </summary>
 public sealed class GraphIndex
 {
     private GraphIndex(
@@ -19,8 +22,10 @@ public sealed class GraphIndex
 
     public IReadOnlyDictionary<string, GraphNode> Nodes { get; }
 
+    /// <summary>methodId → 调用它的方法 Id 列表。</summary>
     public IReadOnlyDictionary<string, IReadOnlyList<string>> Callers { get; }
 
+    /// <summary>methodId → 它调用的方法 Id 列表。</summary>
     public IReadOnlyDictionary<string, IReadOnlyList<string>> Callees { get; }
 
     public static GraphIndex Build(CodeGraph graph)
@@ -28,11 +33,8 @@ public sealed class GraphIndex
         ArgumentNullException.ThrowIfNull(graph);
 
         var nodes = graph.Nodes.ToDictionary(node => node.Id, StringComparer.Ordinal);
-        var callers = nodes.Keys.ToDictionary(id => id, _ => (IReadOnlyList<string>)[], StringComparer.Ordinal);
-        var callees = nodes.Keys.ToDictionary(id => id, _ => (IReadOnlyList<string>)[], StringComparer.Ordinal);
-
-        var callerLists = callers.ToDictionary(pair => pair.Key, _ => new List<string>(), StringComparer.Ordinal);
-        var calleeLists = callees.ToDictionary(pair => pair.Key, _ => new List<string>(), StringComparer.Ordinal);
+        var callerLists = nodes.Keys.ToDictionary(id => id, _ => new List<string>(), StringComparer.Ordinal);
+        var calleeLists = nodes.Keys.ToDictionary(id => id, _ => new List<string>(), StringComparer.Ordinal);
 
         foreach (var edge in graph.Edges)
         {

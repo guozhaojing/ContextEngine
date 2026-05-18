@@ -1,3 +1,7 @@
+// =============================================================================
+// Export/CodeGraphJsonExporter.cs — 将代码图导出为 graph-*.json
+// =============================================================================
+
 using System.Text.Json;
 using Core.Graph;
 
@@ -31,6 +35,7 @@ public static class CodeGraphJsonExporter
             edgeCount = graph.Edges.Count,
             resolvedEdgeCount = graph.ResolvedEdgeCount,
             externalNodeCount = graph.ExternalNodeCount,
+            factCount = graph.Facts.Count,
             nodes = graph.Nodes.Select(n => new
             {
                 n.Id,
@@ -52,6 +57,15 @@ public static class CodeGraphJsonExporter
                 kind = e.Kind,
                 resolved = e.IsResolved,
                 attributes = e.Attributes
+            }),
+            facts = graph.Facts.Select(f => new
+            {
+                f.Analyzer,
+                f.SubjectId,
+                f.SubjectKind,
+                f.FactType,
+                f.SourceFile,
+                data = f.Data
             })
         };
 

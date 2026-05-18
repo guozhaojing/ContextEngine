@@ -1,11 +1,15 @@
+// =============================================================================
+// Graph/GraphQueryService.cs — 代码图查询服务（只读）
+// =============================================================================
+// 【边界】只依赖 GraphIndex；不修改图；不调用 Builder / Semantic。
+// API：GetCallers / GetCallees / GetCallChain / FindEntryPoints
+// =============================================================================
+
 using Core.Graph.Indexing;
 using Core.Graph.Traversal;
 
 namespace Core.Graph;
 
-/// <summary>
-/// 纯查询服务：仅依赖 <see cref="GraphIndex"/>，与构建逻辑解耦。
-/// </summary>
 public sealed class GraphQueryService
 {
     private readonly GraphIndex _index;
@@ -25,18 +29,24 @@ public sealed class GraphQueryService
     public GraphNode? GetNode(string methodId) =>
         _index.Nodes.TryGetValue(methodId, out var node) ? node : null;
 
+    /// <summary>谁调用了该方法？（上游 B ← A 中的 A）</summary>
     public IReadOnlyList<string> GetCallers(string methodId)
     {
         EnsureExists(methodId);
         return _index.Callers[methodId];
     }
 
+    /// <summary>该方法调用了谁？（下游 A → B 中的 B）</summary>
     public IReadOnlyList<string> GetCallees(string methodId)
     {
         EnsureExists(methodId);
         return _index.Callees[methodId];
     }
 
+    /// <summary>
+    /// 从 methodId 向下展开调用链，depth 为向下走的边数。
+    /// 返回多条路径（分支会产生多条链）。
+    /// </summary>
     public IReadOnlyList<IReadOnlyList<string>> GetCallChain(string methodId, int depth)
     {
         EnsureExists(methodId);
@@ -54,6 +64,9 @@ public sealed class GraphQueryService
         return chains;
     }
 
+    /// <summary>
+    /// 沿 CalledBy 向上追溯到没有上游的入口方法（用于影响面/入口分析）。
+    /// </summary>
     public IReadOnlyList<string> FindEntryPoints(string methodId)
     {
         EnsureExists(methodId);

@@ -1,3 +1,11 @@
+// =============================================================================
+// Graph/CodeGraphBuilder.cs — 基础调用图构建器
+// =============================================================================
+// 职责：CodeUnit → Nodes + Edges（仅 call 类型）
+// 不做：查询、分析器、直接改 GraphNode（除创建节点时的基本字段）
+// 流程：注册表 → 节点 → 语义边 → 外部节点补全 → CalledBy 物化 → GraphIndex
+// =============================================================================
+
 using Core.Graph.Building;
 using Core.Graph.Identity;
 using Core.Graph.Indexing;
@@ -9,6 +17,9 @@ namespace Core.Graph;
 
 public static class CodeGraphBuilder
 {
+    /// <summary>
+    /// 从扫描结果构建基础调用图及查询索引。
+    /// </summary>
     public static CodeGraphBuildResult Build(SolutionScanResult scan)
     {
         var units = scan.AllCodeUnits;
@@ -17,13 +28,18 @@ public static class CodeGraphBuilder
         var targetResolver = new SemanticCallTargetResolver(registry);
         var nodeMap = new Dictionary<string, GraphNode>(StringComparer.Ordinal);
 
+        // 第一步：每个 CodeUnit 一个节点
         foreach (var unit in units)
             AddNode(graph, nodeMap, unit);
 
+        // 第二步：根据 ResolvedCalls 连边
         foreach (var unit in units)
             AddEdgesForUnit(graph, nodeMap, targetResolver, unit);
 
+        // 第三步：为指向外部的边创建 external 节点
         EnsureExternalNodes(graph, nodeMap);
+
+        // 第四步：从边生成 CalledBy，并构建邻接索引
         GraphAdjacencyMaterializer.Apply(graph);
         var index = GraphIndex.Build(graph);
 
@@ -42,9 +58,14 @@ public static class CodeGraphBuilder
         Dictionary<string, GraphNode> nodeMap,
         CodeUnit unit)
     {
+        var id = MethodIdBuilder.FromCodeUnit(unit).Value;
+
+        if (nodeMap.ContainsKey(id))
+            return;
+
         var node = new GraphNode
         {
-            Id = MethodIdBuilder.FromCodeUnit(unit).Value,
+            Id = id,
             Label = $"{unit.ClassName}.{unit.MethodName}",
             ProjectName = unit.ProjectName,
             ProjectPath = unit.ProjectPath,
@@ -55,7 +76,7 @@ public static class CodeGraphBuilder
         };
 
         graph.Nodes.Add(node);
-        nodeMap[node.Id] = node;
+        nodeMap[id] = node;
     }
 
     private static void AddEdgesForUnit(

@@ -1,12 +1,16 @@
+// =============================================================================
+// Graph/Building/MethodRegistry.cs — 解决方案内方法的索引表
+// =============================================================================
+// 建图时把 ResolvedMethodInfo 映射到 MethodId。
+// 先按「项目+限定名」精确匹配，再按「限定名唯一」回退。
+// =============================================================================
+
 using Core.Graph.Identity;
 using Core.Models;
 using Core.Semantics;
 
 namespace Core.Graph.Building;
 
-/// <summary>
-/// 扫描结果的方法索引，供图构建阶段将语义解析结果映射为稳定 MethodId。
-/// </summary>
 internal sealed class MethodRegistry
 {
     private readonly Dictionary<string, string> _byProjectAndQualified = new(StringComparer.Ordinal);
@@ -41,6 +45,7 @@ internal sealed class MethodRegistry
         if (_byProjectAndQualified.TryGetValue(projectKey, out methodId!))
             return true;
 
+        // 全解决方案中限定名唯一时才回退（避免重名方法连错边）
         if (_byQualified.TryGetValue(qualified, out var candidates) && candidates.Count == 1)
         {
             methodId = candidates[0];
@@ -49,10 +54,6 @@ internal sealed class MethodRegistry
 
         return false;
     }
-
-    public bool Contains(string methodId) =>
-        _byProjectAndQualified.ContainsValue(methodId)
-        || _byQualified.Values.Any(ids => ids.Contains(methodId, StringComparer.Ordinal));
 
     private void AddQualified(string qualified, string methodId)
     {

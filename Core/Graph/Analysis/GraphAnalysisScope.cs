@@ -1,8 +1,9 @@
+// =============================================================================
+// Graph/Analysis/GraphAnalysisScope.cs — 分析执行范围（全量 / 增量按文件）
+// =============================================================================
+
 namespace Core.Graph.Analysis;
 
-/// <summary>
-/// 分析执行范围，用于全量或按文件增量重算。
-/// </summary>
 public sealed class GraphAnalysisScope
 {
     public bool IsFullScan { get; init; } = true;

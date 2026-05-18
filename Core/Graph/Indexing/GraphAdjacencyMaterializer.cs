@@ -1,10 +1,14 @@
+// =============================================================================
+// Graph/Indexing/GraphAdjacencyMaterializer.cs
+// =============================================================================
+// 根据 Edges 填充每个节点的 CalledBy 列表（反向邻接）。
+// 属于构建后处理，不是查询逻辑。
+// =============================================================================
+
 using Core.Graph;
 
 namespace Core.Graph.Indexing;
 
-/// <summary>
-/// 根据边集物化 GraphNode.CalledBy（纯数据结构填充，无查询逻辑）。
-/// </summary>
 public static class GraphAdjacencyMaterializer
 {
     public static void Apply(CodeGraph graph)

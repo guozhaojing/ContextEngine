@@ -1,3 +1,7 @@
+// =============================================================================
+// Export/CodeUnitJsonExporter.cs — 将扫描结果导出为 scan-*.json
+// =============================================================================
+
 using System.Text.Json;
 using Core.Models;
 using Core.Scanning;
