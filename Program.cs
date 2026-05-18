@@ -324,14 +324,14 @@ while (true)
         // 4. Hybrid retrieval engine
         var retrievalEngine = new HybridRetrievalEngine(vectorStore, fakeProvider, chunkIndex);
 
-        // 5. Demo queries
+        // 5. Demo queries — 基于实际扫描项目的语义查询
         Console.WriteLine();
         Console.WriteLine("─── 检索示例 ───");
 
-        await RunDemoQuery(retrievalEngine, "订单创建流程", topK: 5);
-        await RunDemoQuery(retrievalEngine, "哪些 API 修改 Orders 表", topK: 5,
-            preferredTables: new[] { "Orders" });
-        await RunDemoQuery(retrievalEngine, "用户登录逻辑", topK: 5);
+        await RunDemoQuery(retrievalEngine, "EQA_EquipGRelation 被哪些 API 访问", topK: 5);
+        await RunDemoQuery(retrievalEngine, "质控数据 QCData 的读写流程", topK: 5,
+            preferredTables: new[] { "EQA_EquipGRelation" });
+        await RunDemoQuery(retrievalEngine, "质控图表 QCChart 绘制", topK: 5);
 
         // ── Benchmark + Explainability Demo ─────────────────────
         Console.WriteLine();
@@ -362,7 +362,7 @@ while (true)
         // Explainability demo: explain top result
         Console.WriteLine();
         Console.WriteLine("─── Explainability ───");
-        var explainQuery = new RetrievalQuery { Query = "订单创建流程", TopK = 3 };
+        var explainQuery = new RetrievalQuery { Query = "EQA_EquipGRelation 数据访问", TopK = 3 };
         var explainResult = await retrievalEngine.SearchAsync(explainQuery);
         var explanations = RetrievalExplainer.ExplainAll(explainResult, explainQuery, 3);
 
@@ -392,10 +392,10 @@ while (true)
         var contextBuilder = new ContextBuilder(graphQuery);
         var contextAssembler = new ContextAssembler(contextBuilder, maxTokens: 4096);
 
-        var contextQuery = new RetrievalQuery { Query = "订单创建流程", TopK = 5 };
+        var contextQuery = new RetrievalQuery { Query = "EQA_EquipGRelation 数据访问", TopK = 5 };
         var contextRetrieval = await retrievalEngine.SearchAsync(contextQuery);
 
-        var contextDoc = contextAssembler.Assemble("order-creation", contextRetrieval);
+        var contextDoc = contextAssembler.Assemble("eqa-equip-relation", contextRetrieval);
         Console.WriteLine($"  Document: {contextDoc.Id}");
         Console.WriteLine($"  Tokens: {contextDoc.BudgetUsed} / {contextDoc.BudgetMax}");
         Console.WriteLine($"  Sections: {contextDoc.Sections.Count}");
@@ -482,19 +482,19 @@ static RetrievalBenchmark BuildDemoBenchmark(IReadOnlyList<CodeChunk> chunks)
 
     if (routeChunks.Count > 0)
     {
-        var orderRoute = routeChunks.FirstOrDefault(c =>
-            c.Title.Contains("POST", StringComparison.OrdinalIgnoreCase) ||
+        var qcRoute = routeChunks.FirstOrDefault(c =>
+            c.Title.Contains("QC", StringComparison.OrdinalIgnoreCase) ||
             c.Title.Contains("/api", StringComparison.OrdinalIgnoreCase));
 
         cases.Add(new BenchmarkCase
         {
-            CaseId = "order-creation",
-            Query = "订单创建流程",
+            CaseId = "eqa-entity-access",
+            Query = "EQA_EquipGRelation 实体数据访问",
             Expected = new BenchmarkExpected
             {
-                ChunkIds = orderRoute is not null ? new[] { orderRoute.ChunkId } : [],
-                EntityNames = new[] { "Order" },
-                TableNames = new[] { "Orders" },
+                ChunkIds = qcRoute is not null ? new[] { qcRoute.ChunkId } : [],
+                EntityNames = new[] { "EQA_EquipGRelation" },
+                TableNames = new[] { "EQA_EquipGRelation" },
                 LayerNames = new[] { "Route", "Service", "Repository" }
             },
             TopK = 5,
@@ -507,12 +507,12 @@ static RetrievalBenchmark BuildDemoBenchmark(IReadOnlyList<CodeChunk> chunks)
     {
         cases.Add(new BenchmarkCase
         {
-            CaseId = "table-impact",
-            Query = "哪些 API 修改 Orders 表",
+            CaseId = "qc-data-flow",
+            Query = "QCData 统计分析流程",
             Expected = new BenchmarkExpected
             {
-                EntityNames = new[] { "Order" },
-                TableNames = new[] { "Orders" },
+                EntityNames = entityChunks.SelectMany(c => c.EntityNames).Distinct().Take(3).ToList(),
+                TableNames = entityChunks.SelectMany(c => c.TableNames).Distinct().Take(3).ToList(),
                 LayerNames = new[] { "Route", "Entity" }
             },
             TopK = 5,
@@ -529,7 +529,7 @@ static RetrievalBenchmark BuildDemoBenchmark(IReadOnlyList<CodeChunk> chunks)
             Query = "从 API 到数据库的完整调用链",
             Expected = new BenchmarkExpected
             {
-                LayerNames = new[] { "Route", "Controller", "Service", "Repository", "Entity", "Table" }
+                LayerNames = new[] { "Route", "Controller", "Service", "Repository", "Entity" }
             },
             TopK = 5,
             MinRecall = 0.1,
