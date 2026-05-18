@@ -1,12 +1,18 @@
+using Core.Graph.Analysis;
+
 namespace Core.Graph;
 
 public class CodeGraph
 {
     public string ScanRoot { get; set; } = "";
 
+    public int SchemaVersion { get; set; } = 1;
+
     public List<GraphNode> Nodes { get; set; } = new();
 
     public List<GraphEdge> Edges { get; set; } = new();
+
+    public List<GraphFact> Facts { get; set; } = new();
 
     public int ResolvedEdgeCount => Edges.Count(e => e.IsResolved);
 

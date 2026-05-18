@@ -1,5 +1,6 @@
 ﻿using Core.Export;
 using Core.Graph;
+using Core.Graph.Analysis;
 using Core.Scanning;
 
 Console.WriteLine("ContextEngine — Roslyn 解决方案扫描");
@@ -38,21 +39,22 @@ while (true)
     {
         var scan = await scanner.ScanAsync(scanPath);
         var scanOutputPath = await CodeUnitJsonExporter.SaveAsync(scan);
-        var graph = CodeGraphBuilder.Build(scan);
-        var graphPath = await CodeGraphJsonExporter.SaveAsync(graph);
-        var graphQuery = new GraphQueryService(graph);
+        var graphOrchestrator = new CodeGraphAnalysisOrchestrator(Array.Empty<IGraphAnalyzer>());
+        var graphBuild = graphOrchestrator.BuildAndAnalyze(scan);
+        var graphPath = await CodeGraphJsonExporter.SaveAsync(graphBuild.Graph);
+        var graphQuery = new GraphQueryService(graphBuild);
 
         Console.WriteLine($"扫描根目录: {scan.ScanRoot}");
         Console.WriteLine($"发现项目:   {scan.Projects.Count}");
         Console.WriteLine($"CodeUnit:   {scan.TotalCodeUnits}");
         Console.WriteLine($"扫描结果:   {scanOutputPath}");
         Console.WriteLine();
-        Console.WriteLine($"代码图节点: {graph.Nodes.Count}（外部 {graph.ExternalNodeCount}）");
-        Console.WriteLine($"代码图边:   {graph.Edges.Count}（已解析 {graph.ResolvedEdgeCount}）");
+        Console.WriteLine($"代码图节点: {graphBuild.Graph.Nodes.Count}（外部 {graphBuild.Graph.ExternalNodeCount}）");
+        Console.WriteLine($"代码图边:   {graphBuild.Graph.Edges.Count}（已解析 {graphBuild.Graph.ResolvedEdgeCount}）");
         Console.WriteLine($"代码图文件: {graphPath}");
 
-        var sampleNode = graph.Nodes.FirstOrDefault(n => !n.IsExternal && n.CalledBy.Count > 0)
-            ?? graph.Nodes.FirstOrDefault(n => !n.IsExternal);
+        var sampleNode = graphBuild.Graph.Nodes.FirstOrDefault(n => !n.IsExternal && n.CalledBy.Count > 0)
+            ?? graphBuild.Graph.Nodes.FirstOrDefault(n => !n.IsExternal);
         if (sampleNode is not null)
         {
             var entryPoints = graphQuery.FindEntryPoints(sampleNode.Id);

@@ -1,38 +1,40 @@
+using Core.Graph.Indexing;
+using Core.Graph.Traversal;
+
 namespace Core.Graph;
 
-public class GraphQueryService
+/// <summary>
+/// 纯查询服务：仅依赖 <see cref="GraphIndex"/>，与构建逻辑解耦。
+/// </summary>
+public sealed class GraphQueryService
 {
-    private readonly Dictionary<string, GraphNode> _nodes;
-    private readonly Dictionary<string, List<string>> _callers;
-    private readonly Dictionary<string, List<string>> _callees;
+    private readonly GraphIndex _index;
 
-    public GraphQueryService(CodeGraph graph)
+    public GraphQueryService(GraphIndex index)
     {
-        ArgumentNullException.ThrowIfNull(graph);
-
-        _nodes = graph.Nodes.ToDictionary(node => node.Id, StringComparer.Ordinal);
-        _callers = graph.Nodes.ToDictionary(
-            node => node.Id,
-            node => node.CalledBy.ToList(),
-            StringComparer.Ordinal);
-        _callees = BuildCalleesIndex(graph.Edges);
+        _index = index ?? throw new ArgumentNullException(nameof(index));
     }
 
-    public bool Contains(string methodId) => _nodes.ContainsKey(methodId);
+    public GraphQueryService(CodeGraphBuildResult buildResult)
+        : this(buildResult.Index)
+    {
+    }
+
+    public bool Contains(string methodId) => _index.Nodes.ContainsKey(methodId);
 
     public GraphNode? GetNode(string methodId) =>
-        _nodes.TryGetValue(methodId, out var node) ? node : null;
+        _index.Nodes.TryGetValue(methodId, out var node) ? node : null;
 
     public IReadOnlyList<string> GetCallers(string methodId)
     {
         EnsureExists(methodId);
-        return _callers[methodId];
+        return _index.Callers[methodId];
     }
 
     public IReadOnlyList<string> GetCallees(string methodId)
     {
         EnsureExists(methodId);
-        return _callees.TryGetValue(methodId, out var callees) ? callees : [];
+        return _index.Callees[methodId];
     }
 
     public IReadOnlyList<IReadOnlyList<string>> GetCallChain(string methodId, int depth)
@@ -46,7 +48,9 @@ public class GraphQueryService
 
         var chains = new List<IReadOnlyList<string>>();
         var path = new List<string> { methodId };
-        DfsCallChain(methodId, depth, path, chains);
+        var visiting = new HashSet<string>(StringComparer.Ordinal);
+
+        DfsCallChain(methodId, depth, path, chains, visiting);
         return chains;
     }
 
@@ -57,38 +61,46 @@ public class GraphQueryService
         var entryPoints = new HashSet<string>(StringComparer.Ordinal);
         var visiting = new HashSet<string>(StringComparer.Ordinal);
 
-        void WalkBack(string current)
+        WalkBack(methodId, entryPoints, visiting);
+        return entryPoints.OrderBy(id => id, StringComparer.Ordinal).ToList();
+    }
+
+    private void WalkBack(string current, HashSet<string> entryPoints, HashSet<string> visiting)
+    {
+        if (!GraphTraversal.TryEnter(visiting, current))
+            return;
+
+        var callers = GetCallers(current);
+        if (callers.Count == 0)
         {
-            if (!visiting.Add(current))
-                return;
-
-            var callers = GetCallers(current);
-            if (callers.Count == 0)
-            {
-                entryPoints.Add(current);
-                visiting.Remove(current);
-                return;
-            }
-
-            foreach (var caller in callers)
-                WalkBack(caller);
-
-            visiting.Remove(current);
+            entryPoints.Add(current);
+            GraphTraversal.Leave(visiting, current);
+            return;
         }
 
-        WalkBack(methodId);
-        return entryPoints.OrderBy(id => id, StringComparer.Ordinal).ToList();
+        foreach (var caller in callers)
+            WalkBack(caller, entryPoints, visiting);
+
+        GraphTraversal.Leave(visiting, current);
     }
 
     private void DfsCallChain(
         string current,
         int remainingDepth,
         List<string> path,
-        List<IReadOnlyList<string>> chains)
+        List<IReadOnlyList<string>> chains,
+        HashSet<string> visiting)
     {
+        if (!GraphTraversal.TryEnter(visiting, current))
+        {
+            chains.Add(path.ToList());
+            return;
+        }
+
         if (remainingDepth == 0)
         {
             chains.Add(path.ToList());
+            GraphTraversal.Leave(visiting, current);
             return;
         }
 
@@ -96,42 +108,26 @@ public class GraphQueryService
         if (callees.Count == 0)
         {
             chains.Add(path.ToList());
+            GraphTraversal.Leave(visiting, current);
             return;
         }
 
         var extended = false;
         foreach (var callee in callees)
         {
-            if (path.Contains(callee, StringComparer.Ordinal))
+            if (GraphTraversal.IsInPath(path, callee))
                 continue;
 
             path.Add(callee);
             extended = true;
-            DfsCallChain(callee, remainingDepth - 1, path, chains);
+            DfsCallChain(callee, remainingDepth - 1, path, chains, visiting);
             path.RemoveAt(path.Count - 1);
         }
 
         if (!extended)
             chains.Add(path.ToList());
-    }
 
-    private static Dictionary<string, List<string>> BuildCalleesIndex(IEnumerable<GraphEdge> edges)
-    {
-        var callees = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-
-        foreach (var edge in edges)
-        {
-            if (!callees.TryGetValue(edge.FromId, out var targets))
-            {
-                targets = [];
-                callees[edge.FromId] = targets;
-            }
-
-            if (!targets.Contains(edge.ToId, StringComparer.Ordinal))
-                targets.Add(edge.ToId);
-        }
-
-        return callees;
+        GraphTraversal.Leave(visiting, current);
     }
 
     private void EnsureExists(string methodId)

@@ -1,111 +1,110 @@
+using Core.Graph.Building;
+using Core.Graph.Identity;
+using Core.Graph.Indexing;
 using Core.Models;
 using Core.Scanning;
+using Core.Semantics;
 
 namespace Core.Graph;
 
 public static class CodeGraphBuilder
 {
-    public static CodeGraph Build(SolutionScanResult scan)
+    public static CodeGraphBuildResult Build(SolutionScanResult scan)
     {
         var units = scan.AllCodeUnits;
         var graph = new CodeGraph { ScanRoot = scan.ScanRoot };
-        var index = new MethodIndex(units);
+        var registry = new MethodRegistry(units);
+        var targetResolver = new SemanticCallTargetResolver(registry);
         var nodeMap = new Dictionary<string, GraphNode>(StringComparer.Ordinal);
 
         foreach (var unit in units)
-        {
-            var node = ToGraphNode(unit);
-            graph.Nodes.Add(node);
-            nodeMap[node.Id] = node;
-        }
+            AddNode(graph, nodeMap, unit);
 
         foreach (var unit in units)
+            AddEdgesForUnit(graph, nodeMap, targetResolver, unit);
+
+        EnsureExternalNodes(graph, nodeMap);
+        GraphAdjacencyMaterializer.Apply(graph);
+        var index = GraphIndex.Build(graph);
+
+        return new CodeGraphBuildResult
         {
-            var fromId = ToNodeId(unit);
-            var seenCalls = new HashSet<string>(StringComparer.Ordinal);
-
-            foreach (var call in unit.Calls)
-            {
-                if (!seenCalls.Add(call))
-                    continue;
-
-                var targetId = CallResolver.ResolveTargetNodeId(call, unit, index);
-                if (targetId is not null && nodeMap.ContainsKey(targetId))
-                {
-                    graph.Edges.Add(new GraphEdge
-                    {
-                        FromId = fromId,
-                        ToId = targetId,
-                        Call = call,
-                        IsResolved = true
-                    });
-                    continue;
-                }
-
-                var externalId = ToExternalNodeId(call);
-                if (!nodeMap.TryGetValue(externalId, out var externalNode))
-                {
-                    externalNode = new GraphNode
-                    {
-                        Id = externalId,
-                        Label = call,
-                        ClassName = "(external)",
-                        MethodName = call,
-                        IsExternal = true
-                    };
-                    graph.Nodes.Add(externalNode);
-                    nodeMap[externalId] = externalNode;
-                }
-
-                graph.Edges.Add(new GraphEdge
-                {
-                    FromId = fromId,
-                    ToId = externalId,
-                    Call = call,
-                    IsResolved = false
-                });
-            }
-        }
-
-        BuildReverseRelations(graph);
-        return graph;
+            Graph = graph,
+            Index = index
+        };
     }
 
-    private static void BuildReverseRelations(CodeGraph graph)
-    {
-        var calledByMap = graph.Nodes.ToDictionary(
-            node => node.Id,
-            _ => new List<string>(),
-            StringComparer.Ordinal);
+    [Obsolete("Use MethodIdBuilder.FromCodeUnit instead.")]
+    public static string ToNodeId(CodeUnit unit) => MethodIdBuilder.FromCodeUnit(unit).Value;
 
-        foreach (var edge in graph.Edges)
+    private static void AddNode(
+        CodeGraph graph,
+        Dictionary<string, GraphNode> nodeMap,
+        CodeUnit unit)
+    {
+        var node = new GraphNode
         {
-            if (!calledByMap.TryGetValue(edge.ToId, out var callers))
+            Id = MethodIdBuilder.FromCodeUnit(unit).Value,
+            Label = $"{unit.ClassName}.{unit.MethodName}",
+            ProjectName = unit.ProjectName,
+            ProjectPath = unit.ProjectPath,
+            Namespace = unit.Namespace,
+            ClassName = unit.ClassName,
+            MethodName = unit.MethodName,
+            IsExternal = false
+        };
+
+        graph.Nodes.Add(node);
+        nodeMap[node.Id] = node;
+    }
+
+    private static void AddEdgesForUnit(
+        CodeGraph graph,
+        Dictionary<string, GraphNode> nodeMap,
+        SemanticCallTargetResolver targetResolver,
+        CodeUnit unit)
+    {
+        var fromId = MethodIdBuilder.FromCodeUnit(unit).Value;
+        var seenTargets = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var resolved in unit.ResolvedCalls)
+        {
+            if (!targetResolver.TryResolveTargetId(resolved, unit.ProjectPath, out var targetId))
                 continue;
 
-            if (!callers.Contains(edge.FromId, StringComparer.Ordinal))
-                callers.Add(edge.FromId);
-        }
+            if (!seenTargets.Add($"{fromId}->{targetId}"))
+                continue;
 
-        foreach (var node in graph.Nodes)
-            node.CalledBy = calledByMap[node.Id];
+            var isResolved = nodeMap.ContainsKey(targetId) && !nodeMap[targetId].IsExternal;
+            graph.Edges.Add(new GraphEdge
+            {
+                FromId = fromId,
+                ToId = targetId,
+                Call = ResolvedMethodInfoFormatter.ToQualifiedName(resolved),
+                IsResolved = isResolved,
+                Kind = GraphEdgeKinds.Call
+            });
+        }
     }
 
-    public static string ToNodeId(CodeUnit unit) =>
-        string.IsNullOrEmpty(unit.Namespace)
-            ? $"{unit.ProjectName}|{unit.ClassName}.{unit.MethodName}"
-            : $"{unit.ProjectName}|{unit.Namespace}.{unit.ClassName}.{unit.MethodName}";
-
-    private static GraphNode ToGraphNode(CodeUnit unit) => new()
+    private static void EnsureExternalNodes(CodeGraph graph, Dictionary<string, GraphNode> nodeMap)
     {
-        Id = ToNodeId(unit),
-        Label = $"{unit.ClassName}.{unit.MethodName}",
-        ProjectName = unit.ProjectName,
-        Namespace = unit.Namespace,
-        ClassName = unit.ClassName,
-        MethodName = unit.MethodName,
-        IsExternal = false
-    };
+        foreach (var edge in graph.Edges)
+        {
+            if (nodeMap.ContainsKey(edge.ToId))
+                continue;
 
-    private static string ToExternalNodeId(string call) => $"external|{call}";
+            var externalNode = new GraphNode
+            {
+                Id = edge.ToId,
+                Label = edge.Call,
+                ClassName = "(external)",
+                MethodName = edge.Call,
+                IsExternal = true
+            };
+
+            graph.Nodes.Add(externalNode);
+            nodeMap[edge.ToId] = externalNode;
+        }
+    }
 }

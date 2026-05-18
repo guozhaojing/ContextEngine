@@ -25,6 +25,7 @@ public static class CodeGraphJsonExporter
         var export = new
         {
             scanRoot = graph.ScanRoot,
+            schemaVersion = graph.SchemaVersion,
             generatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
             nodeCount = graph.Nodes.Count,
             edgeCount = graph.Edges.Count,
@@ -35,18 +36,22 @@ public static class CodeGraphJsonExporter
                 n.Id,
                 n.Label,
                 n.ProjectName,
+                n.ProjectPath,
                 n.Namespace,
                 n.ClassName,
                 n.MethodName,
                 n.IsExternal,
-                calledBy = n.CalledBy
+                calledBy = n.CalledBy,
+                attributes = n.Attributes
             }),
             edges = graph.Edges.Select(e => new
             {
                 from = e.FromId,
                 to = e.ToId,
                 call = e.Call,
-                resolved = e.IsResolved
+                kind = e.Kind,
+                resolved = e.IsResolved,
+                attributes = e.Attributes
             })
         };
 

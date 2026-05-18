@@ -1,3 +1,4 @@
+using Core.Graph.Identity;
 using Core.Models;
 using Core.Semantics;
 using Microsoft.CodeAnalysis;
@@ -112,7 +113,11 @@ public class ProjectCodeScanner
 
                 yield return new CodeUnit
                 {
-                    Id = BuildId(filePath, namespaceName, className, method.Identifier.Text),
+                    Id = MethodIdBuilder.FromMethod(
+                        ToRelativePath(scanRoot, project.ProjectFilePath),
+                        namespaceName,
+                        className,
+                        method.Identifier.Text).Value,
                     FilePath = filePath,
                     RelativeFilePath = ToRelativePath(scanRoot, filePath),
                     ProjectName = project.Name,
@@ -150,12 +155,6 @@ public class ProjectCodeScanner
         }
 
         return results;
-    }
-
-    private static string BuildId(string filePath, string ns, string className, string methodName)
-    {
-        var fullName = string.IsNullOrEmpty(ns) ? $"{className}.{methodName}" : $"{ns}.{className}.{methodName}";
-        return $"{filePath}::{fullName}";
     }
 
     private static string GetNamespace(SyntaxNode node)
