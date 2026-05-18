@@ -8,6 +8,7 @@ using Core.Export;
 using Core.Graph;
 using Core.Graph.Analysis;
 using Core.Graph.Analysis.Analyzers;
+using Core.Graph.Analysis.GenericResolution;
 using Core.Graph.Query;
 using Core.Graph.Indexing;
 using Core.Scanning;
@@ -57,11 +58,14 @@ while (true)
         var scanOutputPath = await CodeUnitJsonExporter.SaveAsync(scan);
 
         // ② 建图：基础调用图 + 分析器管道 + 合并
+        var nhibernateAnalyzer = new NHibernateAnalyzer();
+        var genericAnalyzer = new NhSessionGenericAnalyzer();
         var graphOrchestrator = new CodeGraphAnalysisOrchestrator(new IGraphAnalyzer[]
         {
             new AspNetRouteAnalyzer(),
             new SpringBeanAnalyzer(),
-            new NHibernateAnalyzer()
+            nhibernateAnalyzer,
+            genericAnalyzer
         });
         var graphBuild = graphOrchestrator.BuildAndAnalyze(scan);
         var graphPath = await CodeGraphJsonExporter.SaveAsync(graphBuild.Graph);
@@ -89,6 +93,43 @@ while (true)
             Console.WriteLine($"  事实 [{g.Key}]: {g.Count()}");
 
         Console.WriteLine($"代码图文件: {graphPath}");
+
+        // ── Generic Resolution Benchmark ──────────────────────────
+        var genResult = genericAnalyzer.ResolutionResult;
+        Console.WriteLine();
+        Console.WriteLine("═══ 泛型解析报告 (Generic Resolution) ═══");
+        Console.WriteLine($"类扫描数:       {genResult.ClassesScanned}");
+        Console.WriteLine($"Repository 类:   {genResult.RepositoryClassesFound}");
+        Console.WriteLine($"解析调用数:     {genResult.TotalInvocationsResolved}");
+        Console.WriteLine($"发现实体数:     {genResult.DiscoveredEntities.Count}");
+        Console.WriteLine($"发现表数:       {genResult.DiscoveredTables.Count}");
+        Console.WriteLine($"产出 Edge:      {genResult.EdgesProduced}");
+        Console.WriteLine($"产出 Fact:      {genResult.FactsProduced}");
+        Console.WriteLine($"产出 Annotation:{genResult.AnnotationsProduced}");
+
+        if (genResult.DiscoveredEntities.Count > 0)
+        {
+            Console.WriteLine();
+            Console.WriteLine("发现实体列表:");
+            foreach (var entity in genResult.DiscoveredEntities)
+            {
+                var tables = genResult.EntityClassToTableMap
+                    .GetValueOrDefault(entity, new List<string>());
+                Console.WriteLine($"  {entity} → [{string.Join(", ", tables)}]");
+            }
+        }
+
+        if (genResult.ResolutionByMethod.Count > 0)
+        {
+            Console.WriteLine();
+            Console.WriteLine("解析方式分布:");
+            foreach (var (method, count) in genResult.ResolutionByMethod
+                .OrderByDescending(kv => kv.Value))
+                Console.WriteLine($"  {method}: {count}");
+        }
+
+        Console.WriteLine("════════════════════════════════════");
+        Console.WriteLine();
 
         // 演示查询 API (Query 1.0)
         var sampleNode = graphBuild.Graph.Nodes.FirstOrDefault(n => !n.IsExternal && n.CalledBy.Count > 0)
