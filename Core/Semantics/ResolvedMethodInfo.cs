@@ -17,6 +17,9 @@ public class ResolvedMethodInfo
 
     public string MethodName { get; set; } = "";
 
+    /// <summary>参数类型列表，如 ["int", "string"]，用于区分重载。</summary>
+    public List<string> ParameterTypes { get; set; } = new();
+
     /// <summary>
     /// true = 目标不在当前解决方案源码中（BCL、NuGet 等）或无法解析。
     /// </summary>

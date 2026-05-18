@@ -63,15 +63,21 @@ public static class CodeGraphBuilder
         if (nodeMap.ContainsKey(id))
             return;
 
+        var label = unit.ParameterTypes.Count > 0
+            ? $"{unit.ClassName}.{unit.MethodName}({string.Join(", ", unit.ParameterTypes)})"
+            : $"{unit.ClassName}.{unit.MethodName}";
+
         var node = new GraphNode
         {
             Id = id,
-            Label = $"{unit.ClassName}.{unit.MethodName}",
+            Kind = GraphNodeKind.Method,
+            Label = label,
             ProjectName = unit.ProjectName,
             ProjectPath = unit.ProjectPath,
             Namespace = unit.Namespace,
             ClassName = unit.ClassName,
             MethodName = unit.MethodName,
+            ParameterTypes = unit.ParameterTypes.ToList(),
             IsExternal = false
         };
 
@@ -118,6 +124,7 @@ public static class CodeGraphBuilder
             var externalNode = new GraphNode
             {
                 Id = edge.ToId,
+                Kind = GraphNodeKind.External,
                 Label = edge.Call,
                 ClassName = "(external)",
                 MethodName = edge.Call,

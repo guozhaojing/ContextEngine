@@ -6,6 +6,7 @@
 // =============================================================================
 
 using Core.Graph.Indexing;
+using Core.Graph.Query;
 using Core.Graph.Traversal;
 
 namespace Core.Graph;
@@ -76,6 +77,149 @@ public sealed class GraphQueryService
 
         WalkBack(methodId, entryPoints, visiting);
         return entryPoints.OrderBy(id => id, StringComparer.Ordinal).ToList();
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Semantic Query APIs (Query 2.0)
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// 查找访问指定表的所有 Route 入口路径。
+    /// Route → Controller → Service → Repository → Entity → Table
+    /// </summary>
+    public IReadOnlyList<SemanticPath> FindRoutesToTable(string tableName)
+    {
+        var entityNodeIds = FindEntityNodesByTable(tableName);
+        if (entityNodeIds.Count == 0)
+            return Array.Empty<SemanticPath>();
+
+        var options = SemanticTraversalOptions.TableImpact(tableName);
+        return SemanticTraversalEngine.Traverse(_index, entityNodeIds, options);
+    }
+
+    /// <summary>
+    /// 从 Table 反向查找所有访问入口。
+    /// Table → Entity → Repository → Service → Controller → Route
+    /// </summary>
+    public IReadOnlyList<SemanticPath> FindTableImpact(string tableName)
+    {
+        var entityNodeIds = FindEntityNodesByTable(tableName);
+        if (entityNodeIds.Count == 0)
+            return Array.Empty<SemanticPath>();
+
+        var options = SemanticTraversalOptions.TableImpact(tableName);
+        return SemanticTraversalEngine.Traverse(_index, entityNodeIds, options);
+    }
+
+    /// <summary>
+    /// 查找访问特定 Entity 的所有 API 方法。
+    /// </summary>
+    public IReadOnlyList<SemanticPath> FindApisByEntity(string entityClass)
+    {
+        var entityNodeIds = FindEntityNodesByClass(entityClass);
+        if (entityNodeIds.Count == 0)
+            return Array.Empty<SemanticPath>();
+
+        var options = SemanticTraversalOptions.TableImpact(entityClass);
+        return SemanticTraversalEngine.Traverse(_index, entityNodeIds, options);
+    }
+
+    /// <summary>
+    /// 查找访问指定表的所有 Repository 方法。
+    /// </summary>
+    public IReadOnlyList<SemanticPath> FindRepositoriesByTable(string tableName)
+    {
+        var entityNodeIds = FindEntityNodesByTable(tableName);
+        if (entityNodeIds.Count == 0)
+            return Array.Empty<SemanticPath>();
+
+        var opts = new SemanticTraversalOptions
+        {
+            EdgeKinds = new HashSet<string>(StringComparer.Ordinal) { "nh:entity-access" },
+            Direction = TraversalDirection.Backward,
+            MaxDepth = 1,
+            MaxPaths = 100
+        };
+
+        return SemanticTraversalEngine.Traverse(_index, entityNodeIds, opts);
+    }
+
+    /// <summary>
+    /// 分析某个方法的影响面（上游调用链 → 下游数据链）。
+    /// </summary>
+    public IReadOnlyList<SemanticPath> FindImpactByMethod(string methodId)
+    {
+        EnsureExists(methodId);
+
+        var options = new SemanticTraversalOptions
+        {
+            EdgeKinds = new HashSet<string>(StringComparer.Ordinal)
+                { "call", "spring:implements", "spring:property-ref", "nh:entity-access" },
+            Direction = TraversalDirection.Both,
+            MaxDepth = 8,
+            MaxPaths = 50
+        };
+
+        return SemanticTraversalEngine.Traverse(_index, new[] { methodId }, options);
+    }
+
+    /// <summary>
+    /// 通用多跳语义路径查询。
+    /// </summary>
+    public IReadOnlyList<SemanticPath> FindSemanticPath(
+        string fromId,
+        string toId,
+        SemanticTraversalOptions options)
+    {
+        EnsureExists(fromId);
+        EnsureExists(toId);
+
+        var opt = new SemanticTraversalOptions
+        {
+            EdgeKinds = options.EdgeKinds,
+            NodeKinds = options.NodeKinds,
+            Direction = options.Direction,
+            MinConfidence = options.MinConfidence,
+            MaxDepth = options.MaxDepth ?? 15,
+            MaxPaths = options.MaxPaths,
+            DeduplicatePaths = options.DeduplicatePaths,
+            TargetAttributeKey = "nh-entity-access"  // 匹配 ID target (通过 StopAtNode)
+        };
+
+        return SemanticTraversalEngine.Traverse(_index, new[] { fromId }, opt);
+    }
+
+    /// <summary>
+    /// 查找图中所有节点里 Attributes["nh:table"] 匹配指定表的 Entity 节点。
+    /// </summary>
+    public IReadOnlyList<string> FindEntityNodesByTable(string tableName)
+    {
+        return _index.Nodes.Keys
+            .Where(id => id.StartsWith("ext::nh:entity", StringComparison.Ordinal)
+                         && id.Contains("::" + tableName, StringComparison.Ordinal))
+            .ToList();
+    }
+
+    /// <summary>
+    /// 查找图中所有 Attributes["nh:entity-class"] 匹配的 Entity 节点。
+    /// </summary>
+    public IReadOnlyList<string> FindEntityNodesByClass(string entityClass)
+    {
+        return _index.Nodes.Keys
+            .Where(id => id.StartsWith("ext::nh:entity", StringComparison.Ordinal)
+                         && id.Contains("." + entityClass + "::", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+    }
+
+    /// <summary>
+    /// 查找标注为 entry-point 的方法节点。
+    /// </summary>
+    public IReadOnlyList<string> FindEntryPointNodes()
+    {
+        return _index.Nodes.Values
+            .Where(n => n.Attributes.ContainsKey("aspnet-route:entry-point"))
+            .Select(n => n.Id)
+            .ToList();
     }
 
     private void WalkBack(string current, HashSet<string> entryPoints, HashSet<string> visiting)

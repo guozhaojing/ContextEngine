@@ -35,6 +35,9 @@ public class CodeUnit
 
     public string MethodName { get; set; } = "";
 
+    /// <summary>参数类型列表，如 ["int", "string"]，用于区分重载。</summary>
+    public List<string> ParameterTypes { get; set; } = new();
+
     /// <summary>方法体源码（块体或表达式体）。</summary>
     public string Content { get; set; } = "";
 

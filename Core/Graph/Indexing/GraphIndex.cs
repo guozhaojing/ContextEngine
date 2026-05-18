@@ -13,11 +13,13 @@ public sealed class GraphIndex
     private GraphIndex(
         IReadOnlyDictionary<string, GraphNode> nodes,
         IReadOnlyDictionary<string, IReadOnlyList<string>> callers,
-        IReadOnlyDictionary<string, IReadOnlyList<string>> callees)
+        IReadOnlyDictionary<string, IReadOnlyList<string>> callees,
+        EdgeIndex edgeIndex)
     {
         Nodes = nodes;
         Callers = callers;
         Callees = callees;
+        EdgeIdx = edgeIndex;
     }
 
     public IReadOnlyDictionary<string, GraphNode> Nodes { get; }
@@ -27,6 +29,9 @@ public sealed class GraphIndex
 
     /// <summary>methodId → 它调用的方法 Id 列表。</summary>
     public IReadOnlyDictionary<string, IReadOnlyList<string>> Callees { get; }
+
+    /// <summary>按边 Kind 分组的出入方向索引。</summary>
+    public EdgeIndex EdgeIdx { get; }
 
     public static GraphIndex Build(CodeGraph graph)
     {
@@ -57,6 +62,8 @@ public sealed class GraphIndex
             pair => (IReadOnlyList<string>)pair.Value.AsReadOnly(),
             StringComparer.Ordinal);
 
-        return new GraphIndex(nodes, frozenCallers, frozenCallees);
+        var edgeIndex = EdgeIndex.Build(graph);
+
+        return new GraphIndex(nodes, frozenCallers, frozenCallees, edgeIndex);
     }
 }

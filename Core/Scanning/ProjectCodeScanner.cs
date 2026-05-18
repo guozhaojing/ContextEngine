@@ -130,6 +130,10 @@ public class ProjectCodeScanner
             foreach (var method in classDecl.Members.OfType<MethodDeclarationSyntax>())
             {
                 var resolvedCalls = ExtractResolvedInvocations(method, semanticModel);
+                var paramTypes = method.ParameterList.Parameters
+                    .Select(p => p.Type?.ToString() ?? "")
+                    .Where(t => t.Length > 0)
+                    .ToList();
 
                 yield return new CodeUnit
                 {
@@ -137,7 +141,8 @@ public class ProjectCodeScanner
                         ToRelativePath(scanRoot, project.ProjectFilePath),
                         namespaceName,
                         className,
-                        method.Identifier.Text).Value,
+                        method.Identifier.Text,
+                        paramTypes).Value,
                     FilePath = filePath,
                     RelativeFilePath = ToRelativePath(scanRoot, filePath),
                     ProjectName = project.Name,
@@ -145,6 +150,7 @@ public class ProjectCodeScanner
                     Namespace = namespaceName,
                     ClassName = className,
                     MethodName = method.Identifier.Text,
+                    ParameterTypes = paramTypes,
                     Content = GetMethodBody(method),
                     ResolvedCalls = resolvedCalls,
                     Calls = resolvedCalls

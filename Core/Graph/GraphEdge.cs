@@ -26,3 +26,14 @@ public static class GraphEdgeKinds
 {
     public const string Call = "call";
 }
+
+public static class EdgeLayer
+{
+    public const string Call = "call";
+
+    public const string Framework = "framework";
+
+    public const string Data = "data";
+
+    public const string Transaction = "transaction";
+}

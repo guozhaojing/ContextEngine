@@ -12,6 +12,9 @@ public class GraphNode
     /// <summary>稳定主键，见 MethodIdBuilder。</summary>
     public string Id { get; set; } = "";
 
+    /// <summary>节点类型：method / entity / table / external。</summary>
+    public string Kind { get; set; } = GraphNodeKind.Method;
+
     /// <summary>显示用短名，如 AuditService.Audit。</summary>
     public string Label { get; set; } = "";
 
@@ -24,6 +27,9 @@ public class GraphNode
     public string ClassName { get; set; } = "";
 
     public string MethodName { get; set; } = "";
+
+    /// <summary>参数类型列表，如 ["int", "string"]，用于区分重载。</summary>
+    public List<string> ParameterTypes { get; set; } = new();
 
     /// <summary>true 表示外部库方法或无法纳入解决方案图的节点。</summary>
     public bool IsExternal { get; set; }

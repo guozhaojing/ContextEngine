@@ -39,12 +39,14 @@ public static class CodeGraphJsonExporter
             nodes = graph.Nodes.Select(n => new
             {
                 n.Id,
+                kind = n.Kind,
                 n.Label,
                 n.ProjectName,
                 n.ProjectPath,
                 n.Namespace,
                 n.ClassName,
                 n.MethodName,
+                parameterTypes = n.ParameterTypes,
                 n.IsExternal,
                 calledBy = n.CalledBy,
                 attributes = n.Attributes

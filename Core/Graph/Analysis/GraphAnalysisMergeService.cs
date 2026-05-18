@@ -151,6 +151,7 @@ public sealed class GraphAnalysisMergeService
                 graph.Nodes.Add(new GraphNode
                 {
                     Id = extra.ToId,
+                    Kind = GraphNodeKind.External,
                     Label = extra.Label,
                     ClassName = "(external)",
                     MethodName = extra.Label,
@@ -191,12 +192,14 @@ public sealed class GraphAnalysisMergeService
     private static GraphNode CloneNode(GraphNode node) => new()
     {
         Id = node.Id,
+        Kind = node.Kind,
         Label = node.Label,
         ProjectName = node.ProjectName,
         ProjectPath = node.ProjectPath,
         Namespace = node.Namespace,
         ClassName = node.ClassName,
         MethodName = node.MethodName,
+        ParameterTypes = node.ParameterTypes.ToList(),
         IsExternal = node.IsExternal,
         CalledBy = node.CalledBy.ToList(),
         Attributes = new Dictionary<string, string>(node.Attributes, StringComparer.Ordinal)

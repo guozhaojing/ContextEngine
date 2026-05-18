@@ -21,7 +21,7 @@ internal sealed class MethodRegistry
         foreach (var unit in units)
         {
             var methodId = MethodIdBuilder.FromCodeUnit(unit).Value;
-            var qualified = MethodIdBuilder.BuildQualifiedName(unit.Namespace, unit.ClassName, unit.MethodName);
+            var qualified = MethodIdBuilder.BuildQualifiedName(unit.Namespace, unit.ClassName, unit.MethodName, unit.ParameterTypes);
             var projectKey = $"{MethodIdBuilder.NormalizeProjectPath(unit.ProjectPath)}|{qualified}";
 
             _byProjectAndQualified[projectKey] = methodId;
@@ -39,7 +39,7 @@ internal sealed class MethodRegistry
             return true;
         }
 
-        var qualified = MethodIdBuilder.BuildQualifiedName(target.Namespace, target.ClassName, target.MethodName);
+        var qualified = MethodIdBuilder.BuildQualifiedName(target.Namespace, target.ClassName, target.MethodName, target.ParameterTypes);
         var projectKey = $"{MethodIdBuilder.NormalizeProjectPath(sourceProjectPath)}|{qualified}";
 
         if (_byProjectAndQualified.TryGetValue(projectKey, out methodId!))

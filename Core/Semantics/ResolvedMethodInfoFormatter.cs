@@ -6,15 +6,20 @@ namespace Core.Semantics;
 
 public static class ResolvedMethodInfoFormatter
 {
-    /// <summary>例如：MyApp.Services.AuditService.Audit</summary>
+    /// <summary>例如：MyApp.Services.AuditService.Audit 或 ...Audit(int, string)</summary>
     public static string ToQualifiedName(ResolvedMethodInfo info)
     {
+        string baseName;
         if (string.IsNullOrEmpty(info.ClassName))
-            return info.MethodName;
+            baseName = info.MethodName;
+        else if (string.IsNullOrEmpty(info.Namespace))
+            baseName = $"{info.ClassName}.{info.MethodName}";
+        else
+            baseName = $"{info.Namespace}.{info.ClassName}.{info.MethodName}";
 
-        if (string.IsNullOrEmpty(info.Namespace))
-            return $"{info.ClassName}.{info.MethodName}";
+        if (info.ParameterTypes.Count > 0)
+            return $"{baseName}({string.Join(", ", info.ParameterTypes)})";
 
-        return $"{info.Namespace}.{info.ClassName}.{info.MethodName}";
+        return baseName;
     }
 }

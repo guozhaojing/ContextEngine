@@ -17,16 +17,17 @@ public static class MethodIdBuilder
     private const string ExternalPrefix = "ext";
 
     public static MethodId FromCodeUnit(CodeUnit unit) =>
-        FromMethod(unit.ProjectPath, unit.Namespace, unit.ClassName, unit.MethodName);
+        FromMethod(unit.ProjectPath, unit.Namespace, unit.ClassName, unit.MethodName, unit.ParameterTypes);
 
     public static MethodId FromMethod(
         string projectPath,
         string namespaceName,
         string className,
-        string methodName)
+        string methodName,
+        IReadOnlyList<string>? parameterTypes = null)
     {
         var normalizedProject = NormalizeProjectPath(projectPath);
-        var qualifiedName = BuildQualifiedName(namespaceName, className, methodName);
+        var qualifiedName = BuildQualifiedName(namespaceName, className, methodName, parameterTypes);
         return new MethodId($"{InternalPrefix}:{normalizedProject}::{qualifiedName}");
     }
 
@@ -36,27 +37,31 @@ public static class MethodIdBuilder
             return ForExternal(resolved);
 
         if (!string.IsNullOrEmpty(sourceProjectPath))
-            return FromMethod(sourceProjectPath, resolved.Namespace, resolved.ClassName, resolved.MethodName);
+            return FromMethod(sourceProjectPath, resolved.Namespace, resolved.ClassName, resolved.MethodName, resolved.ParameterTypes);
 
-        var qualifiedName = BuildQualifiedName(resolved.Namespace, resolved.ClassName, resolved.MethodName);
+        var qualifiedName = BuildQualifiedName(resolved.Namespace, resolved.ClassName, resolved.MethodName, resolved.ParameterTypes);
         return new MethodId($"{InternalPrefix}::{qualifiedName}");
     }
 
     public static MethodId ForExternal(ResolvedMethodInfo resolved)
     {
-        var qualifiedName = BuildQualifiedName(resolved.Namespace, resolved.ClassName, resolved.MethodName);
+        var qualifiedName = BuildQualifiedName(resolved.Namespace, resolved.ClassName, resolved.MethodName, resolved.ParameterTypes);
         if (string.IsNullOrEmpty(qualifiedName) || qualifiedName == ".")
             qualifiedName = resolved.MethodName;
 
         return new MethodId($"{ExternalPrefix}::{qualifiedName}");
     }
 
-    public static string BuildQualifiedName(string namespaceName, string className, string methodName)
+    public static string BuildQualifiedName(string namespaceName, string className, string methodName, IReadOnlyList<string>? parameterTypes = null)
     {
-        if (string.IsNullOrEmpty(namespaceName))
-            return $"{className}.{methodName}";
+        var baseName = string.IsNullOrEmpty(namespaceName)
+            ? $"{className}.{methodName}"
+            : $"{namespaceName}.{className}.{methodName}";
 
-        return $"{namespaceName}.{className}.{methodName}";
+        if (parameterTypes is null || parameterTypes.Count == 0)
+            return baseName;
+
+        return $"{baseName}({string.Join(", ", parameterTypes)})";
     }
 
     public static string NormalizeProjectPath(string projectPath) =>

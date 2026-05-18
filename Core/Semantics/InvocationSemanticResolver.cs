@@ -56,6 +56,9 @@ public static class InvocationSemanticResolver
             Namespace = namespaceName,
             ClassName = className,
             MethodName = targetMethod.Name,
+            ParameterTypes = targetMethod.Parameters
+                .Select(p => p.Type.ToDisplayString())
+                .ToList(),
             IsExternal = IsExternalMethod(targetMethod)
         };
     }
