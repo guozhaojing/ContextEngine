@@ -119,6 +119,9 @@ public sealed class NhSessionGenericAnalyzer : IGraphAnalyzer
                 patternMatches, seenEdges, seenFacts);
         }
 
+        ResolutionResult.DiscoveredEntities = _entityRegistry.AllEntities.ToList();
+        ResolutionResult.DiscoveredTables = ResolutionResult.DiscoveredEntities
+            .Select(e => e + "s").ToList();
         ResolutionResult.TotalEntitiesDiscovered = ResolutionResult.DiscoveredEntities.Count;
         ResolutionResult.TotalTablesDiscovered = ResolutionResult.DiscoveredTables.Count;
     }

@@ -21,21 +21,20 @@ public sealed class EntityClassRegistry
     private readonly Dictionary<string, List<EntityBinding>> _entityToDao = new(StringComparer.Ordinal);
     private readonly HashSet<string> _allEntities = new(StringComparer.Ordinal);
 
+    // 只匹配用户确认的精确基类型，禁止模糊匹配
     private static readonly HashSet<string> BllBaseTypes = new(StringComparer.Ordinal)
     {
-        "BaseBLL", "BaseManager", "BaseService", "BLLBase",
-        "BLL", "BaseBll", "GenericManager"
+        "BaseBLL", "IBGenericManager"
     };
 
     private static readonly HashSet<string> DaoBaseTypes = new(StringComparer.Ordinal)
     {
-        "BaseDaoNHB", "BaseDao", "BaseDAO", "GenericDao",
-        "HibernateDaoSupport", "DaoBase"
+        "BaseDaoNHB", "HibernateDaoSupport"
     };
 
     private static readonly HashSet<string> DaoInterfaceTypes = new(StringComparer.Ordinal)
     {
-        "IDBaseDao", "IBaseDao"
+        "IDBaseDao"
     };
 
     public IReadOnlyDictionary<string, EntityBinding> ClassToBinding => _classToBinding;
