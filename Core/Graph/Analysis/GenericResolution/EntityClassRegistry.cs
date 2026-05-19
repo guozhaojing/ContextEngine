@@ -48,6 +48,10 @@ public sealed class EntityClassRegistry
         _entityToDao.Clear();
         _allEntities.Clear();
 
+        var bllCount = 0;
+        var daoCount = 0;
+        var filteredByIsValid = 0;
+
         foreach (var (fullName, classInfo) in inheritanceMap.Classes)
         {
             var shortName = classInfo.Name;
@@ -61,9 +65,15 @@ public sealed class EntityClassRegistry
 
                 if (IsBllBaseType(baseName))
                 {
+                    bllCount++;
                     var entityType = ExtractFirstConcreteArg(baseType.TypeArguments);
                     if (entityType is not null)
                     {
+                        if (!IsValidEntityName(entityType))
+                        {
+                            filteredByIsValid++;
+                            continue;
+                        }
                         Register(shortName, fullName, entityType, EntityBindingKind.BllGeneric,
                             classInfo.SourceFile ?? "",
                             $"{shortName} : {baseType.FullName}");
@@ -71,9 +81,15 @@ public sealed class EntityClassRegistry
                 }
                 else if (IsDaoBaseType(baseName))
                 {
+                    daoCount++;
                     var entityType = ExtractFirstConcreteArg(baseType.TypeArguments);
                     if (entityType is not null)
                     {
+                        if (!IsValidEntityName(entityType))
+                        {
+                            filteredByIsValid++;
+                            continue;
+                        }
                         Register(shortName, fullName, entityType, EntityBindingKind.DaoGeneric,
                             classInfo.SourceFile ?? "",
                             $"{shortName} : {baseType.FullName}");
@@ -81,9 +97,15 @@ public sealed class EntityClassRegistry
                 }
                 else if (IsDaoInterface(baseName))
                 {
+                    daoCount++;
                     var entityType = ExtractFirstConcreteArg(baseType.TypeArguments);
                     if (entityType is not null)
                     {
+                        if (!IsValidEntityName(entityType))
+                        {
+                            filteredByIsValid++;
+                            continue;
+                        }
                         Register(shortName, fullName, entityType, EntityBindingKind.DaoInterface,
                             classInfo.SourceFile ?? "",
                             $"{shortName} : {baseType.FullName}");
@@ -91,6 +113,8 @@ public sealed class EntityClassRegistry
                 }
             }
         }
+
+        Console.WriteLine($"  [EntityRegistry] BLL bindings: {bllCount}, DAO bindings: {daoCount}, filtered: {filteredByIsValid}, unique entities: {_allEntities.Count}");
     }
 
     public EntityBinding? GetBindingForClass(string className)
@@ -191,13 +215,7 @@ public sealed class EntityClassRegistry
         if (typeName.EndsWith("Handler", StringComparison.Ordinal)) return false;
         if (typeName.EndsWith("Controller", StringComparison.Ordinal)) return false;
         if (typeName.EndsWith("Service", StringComparison.Ordinal)) return false;
-        if (typeName.EndsWith("BLL", StringComparison.Ordinal)) return false;
-        if (typeName.EndsWith("DAO", StringComparison.Ordinal)) return false;
-        if (typeName.EndsWith("Dao", StringComparison.Ordinal)) return false;
         if (typeName.StartsWith("I", StringComparison.Ordinal)) return false;
-        if (typeName.Contains("VO", StringComparison.Ordinal)) return false;
-        if (typeName.Contains("Dto", StringComparison.Ordinal)) return false;
-        if (typeName.EndsWith("Entity", StringComparison.Ordinal) && typeName != "BaseEntity") return false;
         return char.IsUpper(typeName[0]) && typeName.Length >= 3;
     }
 

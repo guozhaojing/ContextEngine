@@ -45,6 +45,58 @@ public sealed class GenericInheritanceMap
         }
     }
 
+    public void BuildFromFiles(IEnumerable<string> filePaths)
+    {
+        var processedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var fileList = filePaths.ToList();
+        var totalFiles = fileList.Count;
+        var readCount = 0;
+        var excludedCount = 0;
+
+        foreach (var filePath in fileList)
+        {
+            if (!processedFiles.Add(filePath))
+                continue;
+            if (!File.Exists(filePath))
+                continue;
+            if (ShouldExcludeFile(filePath))
+            {
+                excludedCount++;
+                continue;
+            }
+
+            try
+            {
+                var content = File.ReadAllText(filePath);
+                ParseFileClasses(content, filePath);
+                readCount++;
+            }
+            catch { }
+        }
+
+        Console.WriteLine($"  [InheritanceMap] Total files: {totalFiles}, Read: {readCount}, Excluded: {excludedCount}, Classes found: {_classes.Count}");
+    }
+
+    private static bool ShouldExcludeFile(string filePath)
+    {
+        var fileName = Path.GetFileName(filePath);
+        if (fileName.EndsWith(".Designer.cs", StringComparison.OrdinalIgnoreCase)) return true;
+        if (fileName.EndsWith(".g.cs", StringComparison.OrdinalIgnoreCase)) return true;
+        if (fileName.EndsWith(".generated.cs", StringComparison.OrdinalIgnoreCase)) return true;
+
+        var dir = Path.GetDirectoryName(filePath);
+        if (dir is not null)
+        {
+            foreach (var part in dir.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+            {
+                if (ExcludedDirNames.Contains(part))
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
     public ClassInheritanceInfo? FindClass(string className, string? namespaceName = null)
     {
         if (namespaceName is not null)
@@ -247,11 +299,9 @@ public sealed class GenericInheritanceMap
             if (nsMatch.Success)
                 currentNs = nsMatch.Groups[1].Value;
 
-            // 检测 class 声明（单行，不锚定行尾以防 { 干扰）
+            // 检测 class 声明 — 宽松模式，先匹配 class Name 再找继承
             var classMatch = Regex.Match(line,
-                @"(?:public\s+|internal\s+|protected\s+|private\s+|static\s+|sealed\s+|abstract\s+|partial\s+)*" +
-                @"class\s+(\w+)\s*(?:<\s*([^>]+?)\s*>)?\s*" +
-                @"(?::\s*([^{;]+))?");
+                @"class\s+(\w+)\s*(?:<([^>]+)>)?\s*(?::\s*([^{;]+))?");
 
             if (!classMatch.Success) continue;
 

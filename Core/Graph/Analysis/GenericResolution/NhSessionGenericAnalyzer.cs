@@ -132,7 +132,44 @@ public sealed class NhSessionGenericAnalyzer : IGraphAnalyzer
     private void BuildInheritanceMap(GraphAnalysisContext context)
     {
         _inheritanceMap = new GenericInheritanceMap();
-        _inheritanceMap.Build(context.GetUnitsInScope());
+        
+        var allFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var scanRoot = context.Scan.ScanRoot;
+        var projectCount = 0;
+        var totalCsFiles = 0;
+        
+        foreach (var project in context.Scan.Projects)
+        {
+            try
+            {
+                var absPath = Path.Combine(scanRoot, project.ProjectPath);
+                string? projectDir;
+                
+                if (File.Exists(absPath))
+                    projectDir = Path.GetDirectoryName(absPath);
+                else if (Directory.Exists(absPath))
+                    projectDir = absPath;
+                else
+                    continue;
+                
+                if (projectDir is null || !Directory.Exists(projectDir)) continue;
+                
+                var csFiles = Directory.GetFiles(projectDir, "*.cs", SearchOption.AllDirectories);
+                foreach (var f in csFiles)
+                    allFiles.Add(f);
+                
+                projectCount++;
+                totalCsFiles += csFiles.Length;
+            }
+            catch { }
+        }
+        
+        foreach (var unit in context.GetUnitsInScope())
+            allFiles.Add(unit.FilePath);
+        
+        Console.WriteLine($"  [InheritanceMap] Projects: {projectCount}, .cs files on disk: {totalCsFiles}, unique: {allFiles.Count}");
+        
+        _inheritanceMap.BuildFromFiles(allFiles);
     }
 
     private void AnalyzeFile(
