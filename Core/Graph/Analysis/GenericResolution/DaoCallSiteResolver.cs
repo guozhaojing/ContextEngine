@@ -1,16 +1,8 @@
 // =============================================================================
-// GenericResolution/DaoCallSiteResolver.cs — BLL 方法 → DAO 方法的 Entity 传播
+// GenericResolution/DaoCallSiteResolver.cs — BLL→DAO 调用 Entity 传播 (Strict Mode)
 // =============================================================================
-// 在 BLL 方法体内检测对 DAO 字段的方法调用：
-//   return dao.GetListByWhere(where);    → dao 字段 → Entity
-//   return _repository.FindAll();         → _repository 字段 → Entity
-//   var list = m_dao.Search(query);       → m_dao 字段 → Entity
-//
-// 原理：
-//   1. 找到 BLL 类持有的 DAO 字段（通过 DaoFieldDetector）
-//   2. 在 BLL 方法体内查找对该字段的方法调用
-//   3. 从 DAO 字段类型（泛型）推导触达的 Entity
-//   4. 将该 Entity 绑定回传给 BLL 方法
+// 【Strict】只在 BLL 方法体内检测到对 DAO 字段的实际调用时才绑定 Entity。
+//   禁止：无调用时自动绑定、跨方法链传播、低置信度传播。
 // =============================================================================
 
 using System.Text.RegularExpressions;
@@ -41,7 +33,9 @@ public sealed class DaoCallSiteResolver
 
             if (entityName is null)
             {
-                entityName = _registry.GetEntityForClass(fieldMatch.DaoClassName);
+                var binding = _registry.GetBindingForClass(fieldMatch.DaoClassName);
+                if (binding is not null)
+                    entityName = binding.EntityType;
             }
 
             if (entityName is null) continue;
@@ -60,19 +54,6 @@ public sealed class DaoCallSiteResolver
                     Confidence = fieldMatch.Confidence
                 });
             }
-
-            if (calls.Count == 0)
-            {
-                results.Add(new DaoCallSite
-                {
-                    BllClassName = bllClassName,
-                    DaoFieldName = fieldMatch.FieldName,
-                    DaoClassName = fieldMatch.DaoClassName,
-                    EntityName = entityName,
-                    CalledMethod = "*",
-                    Confidence = GenericResolutionConfidence.Medium
-                });
-            }
         }
 
         return results;
@@ -82,7 +63,8 @@ public sealed class DaoCallSiteResolver
     {
         var calls = new List<string>();
 
-        var pattern = $@"{Regex.Escape(fieldName)}\.(\w+)\s*\(";
+        var escaped = Regex.Escape(fieldName);
+        var pattern = $@"\b{escaped}\.(\w+)\s*\(";
         var matches = Regex.Matches(methodContent, pattern);
 
         foreach (Match match in matches)
@@ -92,7 +74,7 @@ public sealed class DaoCallSiteResolver
                 calls.Add(methodName);
         }
 
-        var thisPattern = $@"this\.{Regex.Escape(fieldName)}\.(\w+)\s*\(";
+        var thisPattern = $@"this\.{escaped}\.(\w+)\s*\(";
         var thisMatches = Regex.Matches(methodContent, thisPattern);
 
         foreach (Match match in thisMatches)

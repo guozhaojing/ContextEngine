@@ -70,6 +70,17 @@ public sealed class NhSessionGenericAnalyzer : IGraphAnalyzer
         ResolutionResult.DiscoveredTables = ResolutionResult.DiscoveredEntities
             .Select(e => e + "s").ToList();
 
+        foreach (var entityName in _entityRegistry.AllEntities)
+        {
+            var bllBindings = _entityRegistry.GetBllBindingsForEntity(entityName);
+            foreach (var b in bllBindings)
+                ResolutionResult.RecordEntityBinding(entityName, b.SourceFile, b.BindingPath);
+
+            var daoBindings = _entityRegistry.GetDaoBindingsForEntity(entityName);
+            foreach (var d in daoBindings)
+                ResolutionResult.RecordEntityBinding(entityName, d.SourceFile, d.BindingPath);
+        }
+
         // Phase 2: 检测 Repository 模式
         var patternMatches = new Dictionary<string, PatternMatchResult>(StringComparer.Ordinal);
         foreach (var (className, classInfo) in _inheritanceMap.Classes)
@@ -210,20 +221,6 @@ public sealed class NhSessionGenericAnalyzer : IGraphAnalyzer
                                 seenEdges, seenFacts, methodName,
                                 $"{callSite.DaoFieldName}.{callSite.CalledMethod}()");
                         }
-                    }
-                }
-
-                // ⑥ 如果类本身是 BLL（从 EntityClassRegistry 获取了 Entity），直接为所有方法绑定
-                if (classEntities.Count == 0 || classEntities.All(e => e.Confidence < GenericResolutionConfidence.Medium))
-                {
-                    var entityFromRegistry = _entityRegistry.GetEntityForClass(className);
-                    if (entityFromRegistry is not null)
-                    {
-                        ProduceEntityAccess(
-                            methodId, entityFromRegistry, "",
-                            GenericResolutionConfidence.High,
-                            "bll-dao-registry", className,
-                            relativePath, context, seenEdges, seenFacts, methodName, "");
                     }
                 }
             }

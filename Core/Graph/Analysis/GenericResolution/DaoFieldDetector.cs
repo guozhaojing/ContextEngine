@@ -1,13 +1,11 @@
 // =============================================================================
-// GenericResolution/DaoFieldDetector.cs — BLL 类中的 DAO 字段检测
+// GenericResolution/DaoFieldDetector.cs — BLL 类中的 DAO 字段检测 (Strict Mode)
 // =============================================================================
-// 检测 BLL 具体类（非 BaseBLL）中持有的 DAO 类型字段/属性：
-//   public IDBModuleGridControlListDao dao;
-//   private BModuleGridControlListDao _moduleGridDao;
-//   protected IDBaseDao<BModuleGridControlList, long> _baseDao;
-//
-// 从 DAO 类型名反推该 BLL 类操作哪个 Entity。
-// 产出：(bllClassName, daoFieldTypeName) → entityName 映射。
+// 【Strict】只通过类型名检测 DAO 字段，禁止基于字段名推断：
+//   ✔ private BModuleGridControlListDao _dao;     → 类型含 Dao 后缀
+//   ✔ protected IDBaseDao<BModuleGridControlList, long> _baseDao; → 类型含 BaseDao
+//   ✔ public IBBModuleGridControlList dao;         → 类型含 IBB 前缀 + 接口
+//   ❌ private IGenericManager<T> _manager;        → 名称匹配 dao/repository（已禁止）
 // =============================================================================
 
 using System.Text.RegularExpressions;
@@ -19,12 +17,6 @@ public sealed class DaoFieldDetector
     private readonly EntityClassRegistry _registry;
     private readonly GenericInheritanceMap _inheritanceMap;
 
-    private static readonly HashSet<string> DaoFieldNamePatterns = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "dao", "repository", "repo", "_dao", "_repository", "_repo",
-        "m_dao", "m_repository", "m_repo", "dataAccess", "dal", "IDao"
-    };
-
     public DaoFieldDetector(EntityClassRegistry registry, GenericInheritanceMap inheritanceMap)
     {
         _registry = registry;
@@ -34,13 +26,11 @@ public sealed class DaoFieldDetector
     public Dictionary<string, DaoFieldMatch> Detect(string fileContent, string filePath)
     {
         var matches = new Dictionary<string, DaoFieldMatch>(StringComparer.Ordinal);
-
         var lines = fileContent.Split('\n');
 
         for (var i = 0; i < lines.Length; i++)
         {
             var line = lines[i].Trim();
-
             if (string.IsNullOrEmpty(line)) continue;
             if (line.StartsWith("//", StringComparison.Ordinal) || line.StartsWith("*", StringComparison.Ordinal))
                 continue;
@@ -95,7 +85,7 @@ public sealed class DaoFieldDetector
         var typeName = CleanTypeName(fieldMatch.Groups[1].Value.Trim());
         var fieldName = fieldMatch.Groups[2].Value.Trim();
 
-        if (!IsDaoField(fieldName, typeName)) return null;
+        if (!IsDaoType(typeName)) return null;
 
         var entityName = ResolveEntityFromType(typeName);
         var daoClassName = ExtractClassName(typeName);
@@ -112,19 +102,28 @@ public sealed class DaoFieldDetector
         };
     }
 
-    private bool IsDaoField(string fieldName, string typeName)
+    private static bool IsDaoType(string typeName)
     {
-        foreach (var pattern in DaoFieldNamePatterns)
-        {
-            if (fieldName.Contains(pattern, StringComparison.OrdinalIgnoreCase))
-                return true;
-        }
+        if (typeName.EndsWith("Dao", StringComparison.OrdinalIgnoreCase) &&
+            !typeName.EndsWith("IDao", StringComparison.OrdinalIgnoreCase))
+            return true;
 
-        if (typeName.Contains("Dao", StringComparison.OrdinalIgnoreCase) ||
-            typeName.Contains("DAO", StringComparison.OrdinalIgnoreCase) ||
-            typeName.Contains("Repository", StringComparison.OrdinalIgnoreCase) ||
-            typeName.Contains("IDBaseDao", StringComparison.Ordinal) ||
-            typeName.Contains("IDao", StringComparison.OrdinalIgnoreCase))
+        if (typeName.Contains("BaseDao", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (typeName.Contains("IDBaseDao", StringComparison.Ordinal))
+            return true;
+
+        if (typeName.Contains("DaoNHB", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (typeName.Contains(".IDao", StringComparison.Ordinal))
+            return true;
+
+        if (Regex.IsMatch(typeName, @"\bIDB\w+Dao\b"))
+            return true;
+
+        if (Regex.IsMatch(typeName, @"\bID\w+Dao\b"))
             return true;
 
         return false;
@@ -135,23 +134,12 @@ public sealed class DaoFieldDetector
         var className = ExtractClassName(typeName);
         if (className is null) return null;
 
-        var entity = _registry.GetEntityForClass(className);
-        if (entity is not null) return entity;
+        var binding = _registry.GetBindingForClass(className);
+        if (binding is not null) return binding.EntityType;
 
-        var stripped = StripInterfacePrefix(className);
-
-        var entity2 = _registry.GetEntityForClass(stripped);
-        if (entity2 is not null) return entity2;
-
-        var classInfo = _inheritanceMap.FindClass(stripped);
-        if (classInfo is not null)
-        {
-            var resolved = _inheritanceMap.ResolveConcreteType(classInfo, "T");
-            if (resolved is not null) return resolved;
-        }
-
-        var genericEntity = ExtractGenericEntity(typeName);
-        if (genericEntity is not null) return genericEntity;
+        var directEntity = ExtractGenericEntity(typeName);
+        if (directEntity is not null && IsLikelyEntityType(directEntity))
+            return directEntity;
 
         return null;
     }
@@ -170,37 +158,18 @@ public sealed class DaoFieldDetector
     private static string? ExtractClassName(string typeName)
     {
         var stripped = typeName.Trim();
-
         if (stripped.StartsWith("I", StringComparison.Ordinal) &&
-            stripped.Length > 1 &&
-            char.IsUpper(stripped[1]))
-        {
+            stripped.Length > 1 && char.IsUpper(stripped[1]))
             stripped = stripped[1..];
-        }
-
         var lt = stripped.IndexOf('<');
         if (lt >= 0) stripped = stripped[..lt];
-
         stripped = stripped.TrimEnd('?');
-
         return stripped;
-    }
-
-    private static string StripInterfacePrefix(string typeName)
-    {
-        if (typeName.StartsWith("I", StringComparison.Ordinal) &&
-            typeName.Length > 1 &&
-            char.IsUpper(typeName[1]))
-            return typeName[1..];
-        return typeName;
     }
 
     private static string CleanTypeName(string typeName)
     {
-        return typeName
-            .Replace("readonly ", "")
-            .Replace("static ", "")
-            .Trim();
+        return typeName.Replace("readonly ", "").Replace("static ", "").Trim();
     }
 
     private static string? ExtractClassBody(string fileContent, string className)
@@ -236,6 +205,12 @@ public sealed class DaoFieldDetector
             or "object" or "void" or "decimal" or "DateTime" or "Guid" or "byte"
             or "T" or "TEntity" or "TKey" or "TValue" or "T1") return false;
         if (Regex.IsMatch(typeName, @"^T\d*$")) return false;
+        if (typeName.EndsWith("Exception", StringComparison.Ordinal)
+            || typeName.EndsWith("Attribute", StringComparison.Ordinal)
+            || typeName.EndsWith("Service", StringComparison.Ordinal)
+            || typeName.EndsWith("BLL", StringComparison.Ordinal)
+            || typeName.EndsWith("Dao", StringComparison.Ordinal)
+            || typeName.StartsWith("I", StringComparison.Ordinal)) return false;
         return char.IsUpper(typeName[0]) && typeName.Length >= 3;
     }
 }
