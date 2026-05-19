@@ -37,6 +37,9 @@ public sealed class NhSessionGenericAnalyzer : IGraphAnalyzer
     private GenericInheritanceMap _inheritanceMap = new();
     private GenericInvocationResolver _invocationResolver = null!;
     private GenericTypeResolver _typeResolver = null!;
+    private EntityClassRegistry _entityRegistry = new();
+    private DaoFieldDetector _daoFieldDetector = null!;
+    private DaoCallSiteResolver _daoCallSiteResolver = null!;
 
     public GenericResolutionResult ResolutionResult { get; private set; } = new();
 
@@ -56,6 +59,16 @@ public sealed class NhSessionGenericAnalyzer : IGraphAnalyzer
         _typeResolver = new GenericTypeResolver(_inheritanceMap);
 
         ResolutionResult.ClassesScanned = _inheritanceMap.Count;
+
+        // Phase 1.5: 构建 Entity ↔ Class 双向注册表 (BLL/DAO 模式)
+        _entityRegistry = new EntityClassRegistry();
+        _entityRegistry.Build(_inheritanceMap);
+        _daoFieldDetector = new DaoFieldDetector(_entityRegistry, _inheritanceMap);
+        _daoCallSiteResolver = new DaoCallSiteResolver(_entityRegistry);
+
+        ResolutionResult.DiscoveredEntities = _entityRegistry.AllEntities.ToList();
+        ResolutionResult.DiscoveredTables = ResolutionResult.DiscoveredEntities
+            .Select(e => e + "s").ToList();
 
         // Phase 2: 检测 Repository 模式
         var patternMatches = new Dictionary<string, PatternMatchResult>(StringComparer.Ordinal);
@@ -132,6 +145,9 @@ public sealed class NhSessionGenericAnalyzer : IGraphAnalyzer
             // 解析该 class 的泛型 entity binding
             var classEntities = ResolveClassEntityBindings(className, classNs, patternMatches);
 
+            // ④ BLL/DAO 字段检测：BLL 类中查找 DAO 字段 → 推导 Entity
+            var daoFields = _daoFieldDetector.DetectInClass(sourceText, relativePath, className);
+
             foreach (var method in classDecl.Members.OfType<MethodDeclarationSyntax>())
             {
                 var methodName = method.Identifier.Text;
@@ -176,6 +192,40 @@ public sealed class NhSessionGenericAnalyzer : IGraphAnalyzer
                 // ③ 检测方法名模式 (如 GetReagentList → reagent entity)
                 DetectMethodNamePattern(methodId, methodName, className,
                     relativePath, context, seenEdges, seenFacts, patternMatches);
+
+                // ⑤ BLL→DAO 调用传播：方法体中调用 DAO 方法 → 推导 Entity
+                if (daoFields.Count > 0 && methodContent is not null)
+                {
+                    var daoCallSites = _daoCallSiteResolver.Resolve(
+                        methodContent, daoFields, className);
+
+                    foreach (var callSite in daoCallSites)
+                    {
+                        if (callSite.Confidence >= GenericResolutionConfidence.Medium)
+                        {
+                            ProduceEntityAccess(
+                                methodId, callSite.EntityName, "", callSite.Confidence,
+                                $"dao-call:{callSite.DaoClassName}.{callSite.CalledMethod}",
+                                className, relativePath, context,
+                                seenEdges, seenFacts, methodName,
+                                $"{callSite.DaoFieldName}.{callSite.CalledMethod}()");
+                        }
+                    }
+                }
+
+                // ⑥ 如果类本身是 BLL（从 EntityClassRegistry 获取了 Entity），直接为所有方法绑定
+                if (classEntities.Count == 0 || classEntities.All(e => e.Confidence < GenericResolutionConfidence.Medium))
+                {
+                    var entityFromRegistry = _entityRegistry.GetEntityForClass(className);
+                    if (entityFromRegistry is not null)
+                    {
+                        ProduceEntityAccess(
+                            methodId, entityFromRegistry, "",
+                            GenericResolutionConfidence.High,
+                            "bll-dao-registry", className,
+                            relativePath, context, seenEdges, seenFacts, methodName, "");
+                    }
+                }
             }
         }
     }
