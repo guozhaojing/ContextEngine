@@ -119,7 +119,10 @@ public sealed class NhSessionGenericAnalyzer : IGraphAnalyzer
                 patternMatches, seenEdges, seenFacts);
         }
 
-        ResolutionResult.DiscoveredEntities = _entityRegistry.AllEntities.ToList();
+        var registryEntities = _entityRegistry.AllEntities;
+        Console.WriteLine($"  [Registry] Found {registryEntities.Count} entities from explicit generic bindings");
+        
+        ResolutionResult.DiscoveredEntities = registryEntities.ToList();
         ResolutionResult.DiscoveredTables = ResolutionResult.DiscoveredEntities
             .Select(e => e + "s").ToList();
         ResolutionResult.TotalEntitiesDiscovered = ResolutionResult.DiscoveredEntities.Count;

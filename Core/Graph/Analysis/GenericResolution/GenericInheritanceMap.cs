@@ -233,7 +233,6 @@ public sealed class GenericInheritanceMap
 
     private void ParseFileClasses(string content, string filePath)
     {
-        // 使用简单的正则 + 状态机解析 class 声明
         var lines = content.Split('\n');
         int i = 0;
         var currentNs = "";
@@ -248,50 +247,83 @@ public sealed class GenericInheritanceMap
             if (nsMatch.Success)
                 currentNs = nsMatch.Groups[1].Value;
 
-            // 检测 class 声明
+            // 检测 class 声明（单行，不锚定行尾以防 { 干扰）
             var classMatch = Regex.Match(line,
                 @"(?:public\s+|internal\s+|protected\s+|private\s+|static\s+|sealed\s+|abstract\s+|partial\s+)*" +
                 @"class\s+(\w+)\s*(?:<\s*([^>]+?)\s*>)?\s*" +
                 @"(?::\s*([^{;]+))?");
 
-            if (classMatch.Success)
+            if (!classMatch.Success) continue;
+
+            var className = classMatch.Groups[1].Value;
+            var genericParams = classMatch.Groups[2].Value;
+            var inheritance = classMatch.Groups[3].Value;
+
+            // 多行 class 声明：本行没有 : 继承部分，检查后续行
+            if (string.IsNullOrWhiteSpace(inheritance))
             {
-                var className = classMatch.Groups[1].Value;
-                var genericParams = classMatch.Groups[2].Value;
-                var inheritance = classMatch.Groups[3].Value;
-
-                var fullName = string.IsNullOrEmpty(currentNs) ? className : $"{currentNs}.{className}";
-
-                if (!_classes.ContainsKey(fullName))
+                var mergedLines = new List<string>();
+                var peek = i;
+                while (peek < lines.Length && peek < i + 4)
                 {
-                    var info = new ClassInheritanceInfo
+                    var nextLine = lines[peek].Trim();
+                    if (nextLine.StartsWith("//", StringComparison.Ordinal))
                     {
-                        FullName = fullName,
-                        Name = className,
-                        Namespace = currentNs,
-                        SourceFile = NormalizeFilePath(filePath, null)
-                    };
-
-                    // 解析泛型参数
-                    if (!string.IsNullOrWhiteSpace(genericParams))
+                        peek++;
+                        continue;
+                    }
+                    if (nextLine.StartsWith("[", StringComparison.Ordinal))
                     {
-                        info.TypeParameters = genericParams
-                            .Split(',', StringSplitOptions.RemoveEmptyEntries)
-                            .Select(p => p.Trim())
-                            .ToList();
+                        peek++;
+                        continue;
                     }
 
-                    // 解析继承列表
-                    if (!string.IsNullOrWhiteSpace(inheritance))
+                    var inheritMatch = Regex.Match(nextLine,
+                        @"^\s*:\s*(.+?)(?:\s*where\s|$)");
+                    if (inheritMatch.Success)
                     {
-                        ParseInheritanceList(inheritance, info);
+                        inheritance = inheritMatch.Groups[1].Value;
+                        i = peek + 1;
+                        break;
                     }
 
-                    _classes[fullName] = info;
+                    if (nextLine.Contains("{", StringComparison.Ordinal) ||
+                        (nextLine.Length > 0 && !nextLine.StartsWith(":", StringComparison.Ordinal) &&
+                         !nextLine.StartsWith("where", StringComparison.Ordinal)))
+                        break;
 
-                    // 跳过类体
-                    i = SkipBracedBlock(lines, i);
+                    peek++;
                 }
+            }
+
+            var fullName = string.IsNullOrEmpty(currentNs) ? className : $"{currentNs}.{className}";
+
+            if (!_classes.ContainsKey(fullName))
+            {
+                var info = new ClassInheritanceInfo
+                {
+                    FullName = fullName,
+                    Name = className,
+                    Namespace = currentNs,
+                    SourceFile = NormalizeFilePath(filePath, null)
+                };
+
+                if (!string.IsNullOrWhiteSpace(genericParams))
+                {
+                    info.TypeParameters = genericParams
+                        .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                        .Select(p => p.Trim())
+                        .ToList();
+                }
+
+                if (!string.IsNullOrWhiteSpace(inheritance))
+                {
+                    ParseInheritanceList(inheritance, info);
+                }
+
+                _classes[fullName] = info;
+
+                i = SkipBracedBlock(lines, i);
             }
         }
     }

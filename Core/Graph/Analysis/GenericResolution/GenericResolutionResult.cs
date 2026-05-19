@@ -47,14 +47,17 @@ public sealed class GenericResolutionResult
             OriginTrace = $"{sourceFile ?? "?"} → {viaClass} → {resolutionMethod}"
         });
 
-        if (!DiscoveredEntities.Contains(entityClass, StringComparer.Ordinal))
-            DiscoveredEntities.Add(entityClass);
-        if (!DiscoveredTables.Contains(table, StringComparer.Ordinal))
-            DiscoveredTables.Add(table);
-        if (!EntityClassToTableMap.ContainsKey(entityClass))
-            EntityClassToTableMap[entityClass] = new List<string>();
-        if (!EntityClassToTableMap[entityClass].Contains(table))
-            EntityClassToTableMap[entityClass].Add(table);
+        if (confidence >= GenericResolutionConfidence.Medium)
+        {
+            if (!DiscoveredEntities.Contains(entityClass, StringComparer.Ordinal))
+                DiscoveredEntities.Add(entityClass);
+            if (!DiscoveredTables.Contains(table, StringComparer.Ordinal))
+                DiscoveredTables.Add(table);
+            if (!EntityClassToTableMap.ContainsKey(entityClass))
+                EntityClassToTableMap[entityClass] = new List<string>();
+            if (!EntityClassToTableMap[entityClass].Contains(table))
+                EntityClassToTableMap[entityClass].Add(table);
+        }
         ResolutionByMethod[resolutionMethod] =
             ResolutionByMethod.GetValueOrDefault(resolutionMethod, 0) + 1;
     }
