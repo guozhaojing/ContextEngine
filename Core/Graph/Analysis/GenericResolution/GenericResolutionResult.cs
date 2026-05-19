@@ -20,6 +20,7 @@ public sealed class GenericResolutionResult
     public Dictionary<string, List<string>> EntityClassToTableMap { get; set; } = new(StringComparer.Ordinal);
     public Dictionary<string, int> ResolutionByMethod { get; set; } = new(StringComparer.Ordinal);
     public List<string> Errors { get; set; } = new();
+    public List<GenericDiagnostic> Diagnostics { get; set; } = new();
     public int EdgesProduced { get; set; }
     public int FactsProduced { get; set; }
     public int AnnotationsProduced { get; set; }
@@ -87,4 +88,21 @@ public sealed class GenericResolutionEntry
     public string ViaClass { get; set; } = "";
     public string? SourceFile { get; set; }
     public string OriginTrace { get; set; } = "";
+}
+
+public enum DiagnosticSeverity
+{
+    Info = 0,
+    Warning = 1,
+    Error = 2
+}
+
+public sealed class GenericDiagnostic
+{
+    public DiagnosticSeverity Severity { get; set; }
+    public string Category { get; set; } = "";
+    public string Message { get; set; } = "";
+    public string? EntityClass { get; set; }
+    public string? ContextClass { get; set; }
+    public string? SourceFile { get; set; }
 }

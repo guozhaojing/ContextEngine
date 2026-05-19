@@ -132,7 +132,7 @@ var graphOrchestrator = new CodeGraphAnalysisOrchestrator(new IGraphAnalyzer[]
 2. Route→Table paths = 12 (partial coverage)
 3. No real project test fixtures in repository
 4. NHibernateAnalyzer + NhSessionGenericAnalyzer may produce duplicate edges for same (method, entity) pair — deduplication relies on seenEdges HashSet
-5. GenericInheritanceMap parses .cs files with regex — may miss complex class declarations (attributes, comments with braces, multi-line inheritance)
+5. GenericInheritanceMap 已全面迁移到 Roslyn SyntaxTree 解析，不再使用 regex。正确处理 partial class、nested class、file-scoped namespace、attributes、multiline declarations。
 
 ## Build & Run
 

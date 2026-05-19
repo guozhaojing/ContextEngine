@@ -30,7 +30,8 @@ public sealed class GraphQueryService
     public GraphNode? GetNode(string methodId) =>
         _index.Nodes.TryGetValue(methodId, out var node) ? node : null;
 
-    public IEnumerable<GraphNode> GetAllNodes() => _index.Nodes.Values;
+    public IEnumerable<GraphNode> GetAllNodes() =>
+        _index.Nodes.Values.OrderBy(n => n.Id, StringComparer.Ordinal);
 
     /// <summary>谁调用了该方法？（上游 B ← A 中的 A）</summary>
     public IReadOnlyList<string> GetCallers(string methodId)
@@ -197,6 +198,7 @@ public sealed class GraphQueryService
     public IReadOnlyList<string> FindEntityNodesByTable(string tableName)
     {
         return _index.Nodes.Keys
+            .OrderBy(k => k, StringComparer.Ordinal)
             .Where(id => id.StartsWith("ext::nh:entity", StringComparison.Ordinal)
                          && id.Contains("::" + tableName, StringComparison.Ordinal))
             .ToList();
@@ -208,6 +210,7 @@ public sealed class GraphQueryService
     public IReadOnlyList<string> FindEntityNodesByClass(string entityClass)
     {
         return _index.Nodes.Keys
+            .OrderBy(k => k, StringComparer.Ordinal)
             .Where(id => id.StartsWith("ext::nh:entity", StringComparison.Ordinal)
                          && id.Contains("." + entityClass + "::", StringComparison.OrdinalIgnoreCase))
             .ToList();
@@ -219,6 +222,7 @@ public sealed class GraphQueryService
     public IReadOnlyList<string> FindEntryPointNodes()
     {
         return _index.Nodes.Values
+            .OrderBy(n => n.Id, StringComparer.Ordinal)
             .Where(n => n.Attributes.ContainsKey("aspnet-route:entry-point"))
             .Select(n => n.Id)
             .ToList();
@@ -236,6 +240,20 @@ public sealed class GraphQueryService
         }
 
         return null;
+    }
+
+    public IReadOnlyList<EdgeInfo> GetOutgoingEdges(string nodeId)
+    {
+        if (!_index.EdgeIdx.OutgoingByKind.TryGetValue(nodeId, out var edges))
+            return Array.Empty<EdgeInfo>();
+        return edges;
+    }
+
+    public IReadOnlyList<EdgeInfo> GetIncomingEdges(string nodeId)
+    {
+        if (!_index.EdgeIdx.IncomingByKind.TryGetValue(nodeId, out var edges))
+            return Array.Empty<EdgeInfo>();
+        return edges;
     }
 
     private void WalkBack(string current, HashSet<string> entryPoints, HashSet<string> visiting)

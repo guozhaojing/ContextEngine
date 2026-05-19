@@ -4,6 +4,7 @@
 // 职责：CodeUnit → Nodes + Edges（仅 call 类型）
 // 不做：查询、分析器、直接改 GraphNode（除创建节点时的基本字段）
 // 流程：注册表 → 节点 → 语义边 → 外部节点补全 → CalledBy 物化 → GraphIndex
+// v2: 集成 SymbolGraphBuilder 进行语义 grounding，边/节点携带 truth 字段。
 // =============================================================================
 
 using Core.Graph.Building;
@@ -43,10 +44,15 @@ public static class CodeGraphBuilder
         GraphAdjacencyMaterializer.Apply(graph);
         var index = GraphIndex.Build(graph);
 
+        // v2: 第五步 — 语义 grounding（绑定 ISymbol）
+        var symbolBuilder = new SymbolGraphBuilder();
+        var symbolIndex = symbolBuilder.EnrichGraph(graph, scan);
+
         return new CodeGraphBuildResult
         {
             Graph = graph,
-            Index = index
+            Index = index,
+            SymbolIndex = symbolIndex,
         };
     }
 
@@ -78,7 +84,9 @@ public static class CodeGraphBuilder
             ClassName = unit.ClassName,
             MethodName = unit.MethodName,
             ParameterTypes = unit.ParameterTypes.ToList(),
-            IsExternal = false
+            IsExternal = false,
+            SourceFile = unit.FilePath,
+            GroundingKind = GroundingKindKinds.SyntaxOnly,
         };
 
         graph.Nodes.Add(node);
@@ -103,13 +111,25 @@ public static class CodeGraphBuilder
                 continue;
 
             var isResolved = nodeMap.ContainsKey(targetId) && !nodeMap[targetId].IsExternal;
+            var confidence = isResolved
+                ? EdgeConfidenceKinds.High
+                : EdgeConfidenceKinds.Medium;
+            var evidence = resolved.IsExternal
+                ? EdgeEvidenceKinds.SyntaxDirect
+                : EdgeEvidenceKinds.SemanticInferred;
+
             graph.Edges.Add(new GraphEdge
             {
                 FromId = fromId,
                 ToId = targetId,
                 Call = ResolvedMethodInfoFormatter.ToQualifiedName(resolved),
                 IsResolved = isResolved,
-                Kind = GraphEdgeKinds.Call
+                Kind = GraphEdgeKinds.Call,
+                Source = EdgeSourceKinds.Roslyn,
+                Confidence = confidence,
+                Evidence = evidence,
+                PropagationDepth = 0,
+                Grounded = isResolved,
             });
         }
     }
@@ -128,7 +148,10 @@ public static class CodeGraphBuilder
                 Label = edge.Call,
                 ClassName = "(external)",
                 MethodName = edge.Call,
-                IsExternal = true
+                IsExternal = true,
+                GroundingKind = GroundingKindKinds.External,
+                TruthType = TruthTypeKinds.Inferred,
+                Confidence = 0.5,
             };
 
             graph.Nodes.Add(externalNode);

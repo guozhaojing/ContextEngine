@@ -1,19 +1,23 @@
 // =============================================================================
-// GenericResolution/GenericInheritanceMap.cs — 泛型继承映射
+// GenericResolution/GenericInheritanceMap.cs — 泛型继承映射 (Roslyn SyntaxTree)
 // =============================================================================
-// 扫描所有源码文件中的 class 声明：
+// 使用 Roslyn SyntaxTree 扫描所有源码文件中的 class/interface 声明：
 //   - 记录 class 的 base types 和 implemented interfaces
 //   - 解析泛型类型参数替换关系
 //   - 支持多级继承链中的类型参数传递
+//   - 完全替代 regex-based parsing
 //
-// 示例：
-//   class BaseRepository<T> { }
-//   class ReagentRepo : BaseRepository<EQA_Reagent> { }
-//   → 记录：在 ReagentRepo 作用域中，BaseRepository 的 T = EQA_Reagent
+// Roslyn 优势：
+//   - 正确处理 attributes / modifiers / partial class / nested class
+//   - 正确处理 file-scoped namespace
+//   - 正确处理 multiline declarations
+//   - 正确处理泛型约束 (where T : class)
 // =============================================================================
 
-using System.Text.RegularExpressions;
 using Core.Models;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace Core.Graph.Analysis.GenericResolution;
 
@@ -77,6 +81,35 @@ public sealed class GenericInheritanceMap
         Console.WriteLine($"  [InheritanceMap] Total files: {totalFiles}, Read: {readCount}, Excluded: {excludedCount}, Classes found: {_classes.Count}");
     }
 
+    public void BuildFromSyntaxTrees(IEnumerable<(string FilePath, SyntaxTree Tree)> syntaxTrees)
+    {
+        var processedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var fileList = syntaxTrees.ToList();
+        var totalFiles = fileList.Count;
+        var readCount = 0;
+        var excludedCount = 0;
+
+        foreach (var (filePath, tree) in fileList)
+        {
+            if (!processedFiles.Add(filePath))
+                continue;
+            if (ShouldExcludeFile(filePath))
+            {
+                excludedCount++;
+                continue;
+            }
+
+            try
+            {
+                ParseSyntaxTree(tree, filePath);
+                readCount++;
+            }
+            catch { }
+        }
+
+        Console.WriteLine($"  [InheritanceMap] Total files: {totalFiles}, Read: {readCount}, Excluded: {excludedCount}, Classes found: {_classes.Count}");
+    }
+
     private static bool ShouldExcludeFile(string filePath)
     {
         var fileName = Path.GetFileName(filePath);
@@ -129,7 +162,6 @@ public sealed class GenericInheritanceMap
         if (depth > 10 || !visited.Add(classInfo.FullName))
             return;
 
-        // 直接泛型参数绑定
         if (classInfo.GenericParameterBindings.TryGetValue(typeParamName, out var bindings))
         {
             foreach (var binding in bindings)
@@ -137,7 +169,6 @@ public sealed class GenericInheritanceMap
                     { TypeParameter = typeParamName, BoundType = binding, ViaClass = classInfo.FullName, Depth = depth });
         }
 
-        // 通过 base type 的泛型参数传递
         foreach (var baseType in classInfo.BaseTypes)
         {
             if (!baseType.IsGeneric || baseType.TypeArguments.Count == 0)
@@ -158,7 +189,6 @@ public sealed class GenericInheritanceMap
                         { TypeParameter = typeParamName, BoundType = $"= {param} (pass-through)", ViaClass = classInfo.FullName, Depth = depth });
                 }
 
-                // 如果参数本身是另一个泛型变量，继续追踪
                 if (arg.StartsWith("T", StringComparison.Ordinal) || arg.Length == 1)
                 {
                     if (classInfo.GenericParameterBindings.TryGetValue(arg, out var argBindings))
@@ -174,11 +204,9 @@ public sealed class GenericInheritanceMap
                 }
             }
 
-            // 递归到 base type 寻找
             ResolveRecursive(classInfo, typeParamName, results, visited, depth + 1);
         }
 
-        // 检查 parent 类（如果存在）
         if (classInfo.ParentClass is not null)
         {
             var parentInfo = FindClass(classInfo.ParentClass);
@@ -187,7 +215,6 @@ public sealed class GenericInheritanceMap
         }
     }
 
-    /// <summary>获取类型参数在继承链中最终被绑定的具体类型。</summary>
     public string? ResolveConcreteType(ClassInheritanceInfo classInfo, string typeParamName)
     {
         var bindings = ResolveTypeParameter(classInfo, typeParamName);
@@ -201,7 +228,6 @@ public sealed class GenericInheritanceMap
         return concrete;
     }
 
-    /// <summary>对 class 的每个 base type 泛型参数，从自身 bindings 解析具体类型。</summary>
     public List<ResolvedGenericArgument> ResolveAllArguments(ClassInheritanceInfo classInfo)
     {
         var results = new List<ResolvedGenericArgument>();
@@ -221,7 +247,6 @@ public sealed class GenericInheritanceMap
                 var arg = baseType.TypeArguments[i];
                 var paramName = i < parentParams.Count ? parentParams[i] : $"T{i}";
 
-                // 如果参数是具体类型（非泛型变量）
                 if (IsConcreteType(arg))
                 {
                     results.Add(new ResolvedGenericArgument
@@ -234,7 +259,6 @@ public sealed class GenericInheritanceMap
                 }
                 else
                 {
-                    // 通过自身泛型绑定解析
                     var concrete = ResolveConcreteType(classInfo, arg);
                     if (concrete is not null)
                     {
@@ -266,7 +290,6 @@ public sealed class GenericInheritanceMap
         return results;
     }
 
-    /// <summary>查找某一类型参数在继承链中的最终实体类型。</summary>
     public string? FindEntityForClass(string className, string typeParamName = "T")
     {
         var classInfo = FindClass(className);
@@ -281,181 +304,174 @@ public sealed class GenericInheritanceMap
         && char.IsUpper(typeArg[0])
         && !(typeArg is "T" or "TEntity" or "TKey" or "TValue"
             || (typeArg.Length <= 2 && typeArg.StartsWith("T", StringComparison.Ordinal)))
-        && !Regex.IsMatch(typeArg, @"^T\d+$");
+        && !NamePatterns.IsGenericParameter(typeArg);
+
+    // =========================================================================
+    // SyntaxTree-based parsing (replaces all regex)
+    // =========================================================================
 
     private void ParseFileClasses(string content, string filePath)
     {
-        var lines = content.Split('\n');
-        int i = 0;
-        var currentNs = "";
+        var tree = CSharpSyntaxTree.ParseText(content);
+        ParseSyntaxTree(tree, filePath);
+    }
 
-        while (i < lines.Length)
+    private void ParseSyntaxTree(SyntaxTree tree, string filePath)
+    {
+        var root = tree.GetCompilationUnitRoot();
+
+        foreach (var typeDecl in root.DescendantNodes().OfType<TypeDeclarationSyntax>())
         {
-            var line = lines[i].Trim();
-            i++;
+            if (typeDecl is not (ClassDeclarationSyntax or InterfaceDeclarationSyntax))
+                continue;
 
-            // 跟踪命名空间
-            var nsMatch = Regex.Match(line, @"^namespace\s+([\w.]+)");
-            if (nsMatch.Success)
-                currentNs = nsMatch.Groups[1].Value;
-
-            // 检测 class 声明 — 宽松模式，先匹配 class Name 再找继承
-            var classMatch = Regex.Match(line,
-                @"class\s+(\w+)\s*(?:<([^>]+)>)?\s*(?::\s*([^{;]+))?");
-
-            if (!classMatch.Success) continue;
-
-            var className = classMatch.Groups[1].Value;
-            var genericParams = classMatch.Groups[2].Value;
-            var inheritance = classMatch.Groups[3].Value;
-
-            // 多行 class 声明：本行没有 : 继承部分，检查后续行
-            if (string.IsNullOrWhiteSpace(inheritance))
-            {
-                var mergedLines = new List<string>();
-                var peek = i;
-                while (peek < lines.Length && peek < i + 4)
-                {
-                    var nextLine = lines[peek].Trim();
-                    if (nextLine.StartsWith("//", StringComparison.Ordinal))
-                    {
-                        peek++;
-                        continue;
-                    }
-                    if (nextLine.StartsWith("[", StringComparison.Ordinal))
-                    {
-                        peek++;
-                        continue;
-                    }
-
-                    var inheritMatch = Regex.Match(nextLine,
-                        @"^\s*:\s*(.+?)(?:\s*where\s|$)");
-                    if (inheritMatch.Success)
-                    {
-                        inheritance = inheritMatch.Groups[1].Value;
-                        i = peek + 1;
-                        break;
-                    }
-
-                    if (nextLine.Contains("{", StringComparison.Ordinal) ||
-                        (nextLine.Length > 0 && !nextLine.StartsWith(":", StringComparison.Ordinal) &&
-                         !nextLine.StartsWith("where", StringComparison.Ordinal)))
-                        break;
-
-                    peek++;
-                }
-            }
-
-            var fullName = string.IsNullOrEmpty(currentNs) ? className : $"{currentNs}.{className}";
-
-            if (!_classes.ContainsKey(fullName))
-            {
-                var info = new ClassInheritanceInfo
-                {
-                    FullName = fullName,
-                    Name = className,
-                    Namespace = currentNs,
-                    SourceFile = NormalizeFilePath(filePath, null)
-                };
-
-                if (!string.IsNullOrWhiteSpace(genericParams))
-                {
-                    info.TypeParameters = genericParams
-                        .Split(',', StringSplitOptions.RemoveEmptyEntries)
-                        .Select(p => p.Trim())
-                        .ToList();
-                }
-
-                if (!string.IsNullOrWhiteSpace(inheritance))
-                {
-                    ParseInheritanceList(inheritance, info);
-                }
-
-                _classes[fullName] = info;
-
-                i = SkipBracedBlock(lines, i);
-            }
+            ProcessTypeDeclaration(typeDecl, filePath, isNested: false);
         }
     }
 
-    private void ParseInheritanceList(string inheritance, ClassInheritanceInfo info)
+    private void ProcessTypeDeclaration(
+        TypeDeclarationSyntax typeDecl,
+        string filePath,
+        bool isNested)
     {
-        var parts = SplitInheritanceParts(inheritance);
+        var className = typeDecl.Identifier.Text;
+        var ns = ResolveNamespace(typeDecl);
+        var fullName = string.IsNullOrEmpty(ns) ? className : $"{ns}.{className}";
 
-        foreach (var part in parts)
+        var nestedTypes = typeDecl.DescendantNodes()
+            .OfType<TypeDeclarationSyntax>()
+            .Where(t => t.Parent == typeDecl)
+            .ToList();
+
+        foreach (var nested in nestedTypes)
         {
-            var trimmed = part.Trim();
-            if (string.IsNullOrEmpty(trimmed))
-                continue;
+            ProcessTypeDeclaration(nested, filePath, isNested: true);
+        }
 
-            var gtMatch = Regex.Match(trimmed, @"^([\w.]+)\s*(?:<([^>]+)>)?");
-            if (!gtMatch.Success)
-                continue;
-
-            var typeName = gtMatch.Groups[1].Value;
-            var typeArgs = gtMatch.Groups[2].Value;
-
-            var baseType = new GenericBaseType
+        if (_classes.ContainsKey(fullName))
+        {
+            var existing = _classes[fullName];
+            if (typeDecl.BaseList is not null)
             {
-                Name = typeName,
-                FullName = trimmed,
-                IsGeneric = !string.IsNullOrWhiteSpace(typeArgs)
-            };
+                foreach (var bt in ParseBaseTypes(typeDecl.BaseList))
+                {
+                    if (!existing.BaseTypes.Any(b =>
+                        string.Equals(b.FullName, bt.FullName, StringComparison.Ordinal)))
+                    {
+                        existing.BaseTypes.Add(bt);
+                    }
+                }
+            }
 
-            if (baseType.IsGeneric)
+            if (typeDecl.TypeParameterList is not null && existing.TypeParameters.Count == 0)
             {
-                baseType.TypeArguments = typeArgs
-                    .Split(',', StringSplitOptions.RemoveEmptyEntries)
-                    .Select(a => a.Trim())
+                existing.TypeParameters = typeDecl.TypeParameterList.Parameters
+                    .Select(p => p.Identifier.Text)
                     .ToList();
             }
 
-            info.BaseTypes.Add(baseType);
-        }
-    }
-
-    private static List<string> SplitInheritanceParts(string inheritance)
-    {
-        var parts = new List<string>();
-        var depth = 0;
-        var start = 0;
-
-        for (var i = 0; i < inheritance.Length; i++)
-        {
-            var c = inheritance[i];
-            if (c == '<') depth++;
-            else if (c == '>') depth--;
-            else if (c == ',' && depth == 0)
+            if (existing.ParentClass is null && isNested && typeDecl.Parent is TypeDeclarationSyntax parentDecl)
             {
-                parts.Add(inheritance[start..i]);
-                start = i + 1;
-            }
-        }
-
-        if (start < inheritance.Length)
-            parts.Add(inheritance[start..]);
-
-        return parts;
-    }
-
-    private static int SkipBracedBlock(string[] lines, int startLine)
-    {
-        var depth = 0;
-        var started = false;
-
-        for (var i = startLine; i < lines.Length; i++)
-        {
-            foreach (var c in lines[i])
-            {
-                if (c == '{') { depth++; started = true; }
-                else if (c == '}') { depth--; }
+                var parentNs = ResolveNamespace(parentDecl);
+                var parentName = parentDecl.Identifier.Text;
+                existing.ParentClass = string.IsNullOrEmpty(parentNs)
+                    ? parentName
+                    : $"{parentNs}.{parentName}";
             }
 
-            if (started && depth == 0)
-                return i + 1;
+            return;
         }
 
-        return lines.Length;
+        var info = new ClassInheritanceInfo
+        {
+            FullName = fullName,
+            Name = className,
+            Namespace = ns,
+            SourceFile = NormalizeFilePath(filePath, null)
+        };
+
+        if (typeDecl.TypeParameterList is not null)
+        {
+            info.TypeParameters = typeDecl.TypeParameterList.Parameters
+                .Select(p => p.Identifier.Text)
+                .ToList();
+        }
+
+        if (typeDecl.BaseList is not null)
+        {
+            info.BaseTypes = ParseBaseTypes(typeDecl.BaseList);
+        }
+
+        if (isNested && typeDecl.Parent is TypeDeclarationSyntax parentTypeDecl)
+        {
+            var parentNs = ResolveNamespace(parentTypeDecl);
+            var parentName = parentTypeDecl.Identifier.Text;
+            info.ParentClass = string.IsNullOrEmpty(parentNs)
+                ? parentName
+                : $"{parentNs}.{parentName}";
+        }
+
+        _classes[fullName] = info;
+    }
+
+    private static List<GenericBaseType> ParseBaseTypes(BaseListSyntax baseList)
+    {
+        var results = new List<GenericBaseType>();
+
+        foreach (var baseTypeSyntax in baseList.Types)
+        {
+            var type = baseTypeSyntax.Type;
+            var typeName = ExtractTypeSimpleName(type);
+            var fullName = type.ToString();
+            var typeArgs = new List<string>();
+
+            if (type is GenericNameSyntax genericName)
+            {
+                typeArgs = genericName.TypeArgumentList.Arguments
+                    .Select(a => a.ToString().Trim())
+                    .ToList();
+            }
+
+            results.Add(new GenericBaseType
+            {
+                Name = typeName,
+                FullName = fullName,
+                IsGeneric = typeArgs.Count > 0,
+                TypeArguments = typeArgs
+            });
+        }
+
+        return results;
+    }
+
+    private static string ExtractTypeSimpleName(TypeSyntax type)
+    {
+        return type switch
+        {
+            PredefinedTypeSyntax predefined => predefined.Keyword.Text,
+            GenericNameSyntax generic => generic.Identifier.Text,
+            SimpleNameSyntax simple => simple.Identifier.Text,
+            QualifiedNameSyntax qualified => qualified.Right.Identifier.Text,
+            AliasQualifiedNameSyntax alias => alias.Name.Identifier.Text,
+            NullableTypeSyntax nullable => ExtractTypeSimpleName(nullable.ElementType),
+            ArrayTypeSyntax array => ExtractTypeSimpleName(array.ElementType),
+            _ => type.ToString().Split('<', '>', '[', ']')[0]
+        };
+    }
+
+    private static string ResolveNamespace(SyntaxNode node)
+    {
+        var nsParts = node.Ancestors()
+            .SelectMany(a =>
+            {
+                if (a is BaseNamespaceDeclarationSyntax nsDecl)
+                    return new[] { nsDecl.Name.ToString() };
+                return Array.Empty<string>();
+            })
+            .Reverse()
+            .ToList();
+
+        return string.Join(".", nsParts);
     }
 
     private static string NormalizeFilePath(string filePath, string? scanRoot) =>
@@ -474,7 +490,6 @@ public sealed class ClassInheritanceInfo
 
     public List<string> TypeParameters { get; set; } = new();
 
-    /// <summary>class 自身的泛型参数绑定（如 class Foo<T> where T : Bar → T → Bar）</summary>
     public Dictionary<string, List<string>> GenericParameterBindings { get; set; } =
         new(StringComparer.Ordinal);
 

@@ -1,14 +1,18 @@
 // =============================================================================
-// GenericResolution/DaoFieldDetector.cs — BLL 类中的 DAO 字段检测 (Strict Mode)
+// GenericResolution/DaoFieldDetector.cs — BLL 类中的 DAO 字段检测 (Roslyn SyntaxTree)
 // =============================================================================
+// 使用 Roslyn FieldDeclarationSyntax / PropertyDeclarationSyntax 替代 regex。
+//
 // 【Strict】只通过类型名检测 DAO 字段，禁止基于字段名推断：
 //   ✔ private BModuleGridControlListDao _dao;     → 类型含 Dao 后缀
 //   ✔ protected IDBaseDao<BModuleGridControlList, long> _baseDao; → 类型含 BaseDao
-//   ✔ public IBBModuleGridControlList dao;         → 类型含 IBB 前缀 + 接口
+//   ✔ public IBBModuleGridControlList dao;         → 类型含 Dao 相关模式
 //   ❌ private IGenericManager<T> _manager;        → 名称匹配 dao/repository（已禁止）
 // =============================================================================
 
-using System.Text.RegularExpressions;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace Core.Graph.Analysis.GenericResolution;
 
@@ -25,24 +29,9 @@ public sealed class DaoFieldDetector
 
     public Dictionary<string, DaoFieldMatch> Detect(string fileContent, string filePath)
     {
-        var matches = new Dictionary<string, DaoFieldMatch>(StringComparer.Ordinal);
-        var lines = fileContent.Split('\n');
-
-        for (var i = 0; i < lines.Length; i++)
-        {
-            var line = lines[i].Trim();
-            if (string.IsNullOrEmpty(line)) continue;
-            if (line.StartsWith("//", StringComparison.Ordinal) || line.StartsWith("*", StringComparison.Ordinal))
-                continue;
-
-            var match = TryMatchDaoField(line);
-            if (match is null) continue;
-
-            if (!matches.ContainsKey(match.FieldTypeName))
-                matches[match.FieldTypeName] = match;
-        }
-
-        return matches;
+        var tree = CSharpSyntaxTree.ParseText(fileContent);
+        var root = tree.GetCompilationUnitRoot();
+        return DetectFromNode(root);
     }
 
     public Dictionary<string, DaoFieldMatch> DetectInClass(
@@ -50,50 +39,80 @@ public sealed class DaoFieldDetector
         string filePath,
         string className)
     {
+        var tree = CSharpSyntaxTree.ParseText(fileContent);
+        var root = tree.GetCompilationUnitRoot();
+
+        var classDecl = root.DescendantNodes()
+            .OfType<ClassDeclarationSyntax>()
+            .FirstOrDefault(c => string.Equals(
+                GetFullClassName(c), className, StringComparison.Ordinal));
+
+        if (classDecl is null)
+            return new Dictionary<string, DaoFieldMatch>(StringComparer.Ordinal);
+
+        return DetectFromClassDeclaration(classDecl);
+    }
+
+    public Dictionary<string, DaoFieldMatch> DetectFromClassDeclaration(ClassDeclarationSyntax classDecl)
+    {
         var matches = new Dictionary<string, DaoFieldMatch>(StringComparer.Ordinal);
 
-        var classBody = ExtractClassBody(fileContent, className);
-        if (classBody is null) return matches;
-
-        var lines = classBody.Split('\n');
-
-        foreach (var rawLine in lines)
+        foreach (var member in classDecl.Members)
         {
-            var line = rawLine.Trim();
-            if (string.IsNullOrEmpty(line)) continue;
-            if (line.StartsWith("//", StringComparison.Ordinal)) continue;
+            if (member is FieldDeclarationSyntax fieldDecl)
+            {
+                var typeSyntax = fieldDecl.Declaration.Type;
+                var typeName = typeSyntax.ToString();
 
-            var match = TryMatchDaoField(line);
-            if (match is null) continue;
-
-            if (!matches.ContainsKey(match.FieldTypeName))
-                matches[match.FieldTypeName] = match;
+                foreach (var variable in fieldDecl.Declaration.Variables)
+                {
+                    var match = TryMatchDaoField(typeName, variable.Identifier.Text);
+                    if (match is not null && !matches.ContainsKey(match.FieldTypeName))
+                        matches[match.FieldTypeName] = match;
+                }
+            }
+            else if (member is PropertyDeclarationSyntax propDecl)
+            {
+                var typeName = propDecl.Type.ToString();
+                var match = TryMatchDaoField(typeName, propDecl.Identifier.Text);
+                if (match is not null && !matches.ContainsKey(match.FieldTypeName))
+                    matches[match.FieldTypeName] = match;
+            }
         }
 
         return matches;
     }
 
-    private DaoFieldMatch? TryMatchDaoField(string line)
+    public Dictionary<string, DaoFieldMatch> DetectFromNode(SyntaxNode root)
     {
-        var fieldMatch = Regex.Match(line,
-            @"(?:public|private|protected|internal|static|readonly)\s+" +
-            @"([\w.<>, \t]+?)\s+" +
-            @"(\w+)\s*[;=]");
+        var matches = new Dictionary<string, DaoFieldMatch>(StringComparer.Ordinal);
 
-        if (!fieldMatch.Success) return null;
+        foreach (var classDecl in root.DescendantNodes().OfType<ClassDeclarationSyntax>())
+        {
+            var classMatches = DetectFromClassDeclaration(classDecl);
+            foreach (var (key, match) in classMatches)
+            {
+                if (!matches.ContainsKey(key))
+                    matches[key] = match;
+            }
+        }
 
-        var typeName = CleanTypeName(fieldMatch.Groups[1].Value.Trim());
-        var fieldName = fieldMatch.Groups[2].Value.Trim();
+        return matches;
+    }
 
-        if (!IsDaoType(typeName)) return null;
+    private DaoFieldMatch? TryMatchDaoField(string typeName, string fieldName)
+    {
+        var cleanedType = CleanTypeName(typeName);
+        if (!IsDaoType(cleanedType))
+            return null;
 
-        var entityName = ResolveEntityFromType(typeName);
-        var daoClassName = ExtractClassName(typeName);
+        var entityName = ResolveEntityFromType(cleanedType);
+        var daoClassName = ExtractClassName(cleanedType);
 
         return new DaoFieldMatch
         {
             FieldName = fieldName,
-            FieldTypeName = typeName,
+            FieldTypeName = cleanedType,
             DaoClassName = daoClassName ?? "",
             EntityName = entityName,
             Confidence = entityName is not null
@@ -120,10 +139,7 @@ public sealed class DaoFieldDetector
         if (typeName.Contains(".IDao", StringComparison.Ordinal))
             return true;
 
-        if (Regex.IsMatch(typeName, @"\bIDB\w+Dao\b"))
-            return true;
-
-        if (Regex.IsMatch(typeName, @"\bID\w+Dao\b"))
+        if (NamePatterns.IsInterfaceDaoPattern(typeName))
             return true;
 
         return false;
@@ -132,10 +148,12 @@ public sealed class DaoFieldDetector
     private string? ResolveEntityFromType(string typeName)
     {
         var className = ExtractClassName(typeName);
-        if (className is null) return null;
+        if (className is null)
+            return null;
 
         var binding = _registry.GetBindingForClass(className);
-        if (binding is not null) return binding.EntityType;
+        if (binding is not null)
+            return binding.EntityType;
 
         var directEntity = ExtractGenericEntity(typeName);
         if (directEntity is not null && IsLikelyEntityType(directEntity))
@@ -146,12 +164,33 @@ public sealed class DaoFieldDetector
 
     private static string? ExtractGenericEntity(string typeName)
     {
-        var match = Regex.Match(typeName, @"<([\w.]+)[,\s>]");
-        if (match.Success)
+        var lt = typeName.IndexOf('<');
+        if (lt < 0)
+            return null;
+
+        var rest = typeName[(lt + 1)..];
+        var depth = 0;
+        var end = -1;
+
+        for (var i = 0; i < rest.Length; i++)
         {
-            var arg = match.Groups[1].Value;
-            if (IsLikelyEntityType(arg)) return arg;
+            if (rest[i] == '<') depth++;
+            else if (rest[i] == '>')
+            {
+                if (depth == 0) { end = i; break; }
+                depth--;
+            }
         }
+
+        if (end < 0)
+            return null;
+
+        rest = rest[..end];
+        var firstArg = rest.Split(',')[0].Trim();
+
+        if (IsLikelyEntityType(firstArg))
+            return firstArg;
+
         return null;
     }
 
@@ -162,55 +201,47 @@ public sealed class DaoFieldDetector
             stripped.Length > 1 && char.IsUpper(stripped[1]))
             stripped = stripped[1..];
         var lt = stripped.IndexOf('<');
-        if (lt >= 0) stripped = stripped[..lt];
+        if (lt >= 0)
+            stripped = stripped[..lt];
         stripped = stripped.TrimEnd('?');
         return stripped;
     }
 
     private static string CleanTypeName(string typeName)
     {
-        return typeName.Replace("readonly ", "").Replace("static ", "").Trim();
+        return typeName.Replace("readonly ", "")
+            .Replace("static ", "")
+            .Trim();
     }
 
-    private static string? ExtractClassBody(string fileContent, string className)
+    private static string GetFullClassName(TypeDeclarationSyntax typeDecl)
     {
-        var idx = fileContent.IndexOf("class " + className, StringComparison.Ordinal);
-        if (idx < 0)
-        {
-            var shortName = className.Contains('.')
-                ? className[(className.LastIndexOf('.') + 1)..]
-                : className;
-            idx = fileContent.IndexOf("class " + shortName, StringComparison.Ordinal);
-        }
-        if (idx < 0) return null;
+        var names = new List<string>();
+        for (SyntaxNode? current = typeDecl;
+            current is TypeDeclarationSyntax t;
+            current = current.Parent)
+            names.Insert(0, t.Identifier.Text);
 
-        var depth = 0;
-        var started = false;
-        var startIdx = -1;
-
-        for (var i = idx; i < fileContent.Length; i++)
-        {
-            var c = fileContent[i];
-            if (c == '{') { depth++; started = true; if (startIdx < 0) startIdx = i + 1; }
-            else if (c == '}') { depth--; if (depth == 0 && started) return fileContent[startIdx..i]; }
-        }
-
-        return null;
+        return string.Join(".", names);
     }
 
     private static bool IsLikelyEntityType(string typeName)
     {
-        if (string.IsNullOrWhiteSpace(typeName)) return false;
+        if (string.IsNullOrWhiteSpace(typeName))
+            return false;
         if (typeName is "int" or "string" or "bool" or "long" or "double" or "float"
             or "object" or "void" or "decimal" or "DateTime" or "Guid" or "byte"
-            or "T" or "TEntity" or "TKey" or "TValue" or "T1") return false;
-        if (Regex.IsMatch(typeName, @"^T\d*$")) return false;
+            or "T" or "TEntity" or "TKey" or "TValue" or "T1")
+            return false;
+        if (NamePatterns.IsGenericParameter(typeName))
+            return false;
         if (typeName.EndsWith("Exception", StringComparison.Ordinal)
             || typeName.EndsWith("Attribute", StringComparison.Ordinal)
             || typeName.EndsWith("Service", StringComparison.Ordinal)
             || typeName.EndsWith("BLL", StringComparison.Ordinal)
             || typeName.EndsWith("Dao", StringComparison.Ordinal)
-            || typeName.StartsWith("I", StringComparison.Ordinal)) return false;
+            || typeName.StartsWith("I", StringComparison.Ordinal))
+            return false;
         return char.IsUpper(typeName[0]) && typeName.Length >= 3;
     }
 }

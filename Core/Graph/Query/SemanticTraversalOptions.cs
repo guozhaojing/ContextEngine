@@ -58,7 +58,7 @@ public sealed class SemanticTraversalOptions
     public static SemanticTraversalOptions TableImpact(string tableName) => new()
     {
         EdgeKinds = new HashSet<string>(StringComparer.Ordinal)
-            { "call", "nh:entity-access" },
+            { "call", "spring:implements", "spring:property-ref", "nh:entity-access" },
         Direction = TraversalDirection.Backward,
         MaxDepth = 15,
         TargetAttributeKey = "aspnet-route:entry-point"

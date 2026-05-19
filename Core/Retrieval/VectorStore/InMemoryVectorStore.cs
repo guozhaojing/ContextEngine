@@ -32,8 +32,11 @@ public sealed class InMemoryVectorStore : IVectorStore
             });
         }
 
-        results.Sort((a, b) => b.Similarity.CompareTo(a.Similarity));
-        var top = results.Take(topK).ToList();
+        var top = results
+            .OrderByDescending(a => a.Similarity)
+            .ThenBy(a => a.ChunkId, StringComparer.Ordinal)
+            .Take(topK)
+            .ToList();
 
         for (var i = 0; i < top.Count; i++)
             top[i] = new VectorSearchResult

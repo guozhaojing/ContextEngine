@@ -1,11 +1,14 @@
 // =============================================================================
-// GenericResolution/DaoCallSiteResolver.cs — BLL→DAO 调用 Entity 传播 (Strict Mode)
+// GenericResolution/DaoCallSiteResolver.cs — BLL→DAO 调用 Entity 传播 (Roslyn)
 // =============================================================================
 // 【Strict】只在 BLL 方法体内检测到对 DAO 字段的实际调用时才绑定 Entity。
+//   使用 Roslyn InvocationExpressionSyntax + MemberAccessExpressionSyntax 替代 regex。
 //   禁止：无调用时自动绑定、跨方法链传播、低置信度传播。
 // =============================================================================
 
-using System.Text.RegularExpressions;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace Core.Graph.Analysis.GenericResolution;
 
@@ -23,9 +26,32 @@ public sealed class DaoCallSiteResolver
         Dictionary<string, DaoFieldMatch> daoFields,
         string bllClassName)
     {
+        if (daoFields.Count == 0)
+            return new List<DaoCallSite>();
+
+        var tree = CSharpSyntaxTree.ParseText(
+            $"class _Wrapper {{ void _M() {{ {methodContent} }} }}");
+        var root = tree.GetCompilationUnitRoot();
+
+        var methodBody = root.DescendantNodes()
+            .OfType<BlockSyntax>()
+            .FirstOrDefault();
+
+        if (methodBody is null)
+            return new List<DaoCallSite>();
+
+        return Resolve(methodBody, daoFields, bllClassName);
+    }
+
+    public List<DaoCallSite> Resolve(
+        BlockSyntax methodBody,
+        Dictionary<string, DaoFieldMatch> daoFields,
+        string bllClassName)
+    {
         var results = new List<DaoCallSite>();
 
-        if (daoFields.Count == 0) return results;
+        if (daoFields.Count == 0)
+            return results;
 
         foreach (var (_, fieldMatch) in daoFields)
         {
@@ -38,9 +64,10 @@ public sealed class DaoCallSiteResolver
                     entityName = binding.EntityType;
             }
 
-            if (entityName is null) continue;
+            if (entityName is null)
+                continue;
 
-            var calls = FindCallsOnField(methodContent, fieldMatch.FieldName);
+            var calls = FindCallsOnField(methodBody, fieldMatch.FieldName);
 
             foreach (var call in calls)
             {
@@ -59,29 +86,48 @@ public sealed class DaoCallSiteResolver
         return results;
     }
 
-    private static List<string> FindCallsOnField(string methodContent, string fieldName)
+    public List<DaoCallSite> Resolve(
+        SyntaxNode? methodNode,
+        Dictionary<string, DaoFieldMatch> daoFields,
+        string bllClassName)
     {
-        var calls = new List<string>();
+        if (methodNode is null)
+            return new List<DaoCallSite>();
 
-        var escaped = Regex.Escape(fieldName);
-        var pattern = $@"\b{escaped}\.(\w+)\s*\(";
-        var matches = Regex.Matches(methodContent, pattern);
+        if (methodNode is BlockSyntax block)
+            return Resolve(block, daoFields, bllClassName);
 
-        foreach (Match match in matches)
+        var root = CSharpSyntaxTree.ParseText(methodNode.ToString()).GetCompilationUnitRoot();
+        var blockBody = root.DescendantNodes().OfType<BlockSyntax>().FirstOrDefault();
+        if (blockBody is null)
+            return new List<DaoCallSite>();
+
+        return Resolve(blockBody, daoFields, bllClassName);
+    }
+
+    private static HashSet<string> FindCallsOnField(BlockSyntax body, string fieldName)
+    {
+        var calls = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var invoc in body.DescendantNodes().OfType<InvocationExpressionSyntax>())
         {
-            var methodName = match.Groups[1].Value;
-            if (!calls.Contains(methodName))
-                calls.Add(methodName);
-        }
+            if (invoc.Expression is MemberAccessExpressionSyntax memberAccess)
+            {
+                if (memberAccess.Expression is IdentifierNameSyntax identifier
+                    && identifier.Identifier.Text == fieldName)
+                {
+                    calls.Add(memberAccess.Name.Identifier.Text);
+                    continue;
+                }
 
-        var thisPattern = $@"this\.{escaped}\.(\w+)\s*\(";
-        var thisMatches = Regex.Matches(methodContent, thisPattern);
-
-        foreach (Match match in thisMatches)
-        {
-            var methodName = match.Groups[1].Value;
-            if (!calls.Contains(methodName))
-                calls.Add(methodName);
+                if (memberAccess.Expression is MemberAccessExpressionSyntax innerAccess
+                    && innerAccess.Expression is ThisExpressionSyntax
+                    && innerAccess.Name.Identifier.Text == fieldName)
+                {
+                    calls.Add(memberAccess.Name.Identifier.Text);
+                    continue;
+                }
+            }
         }
 
         return calls;

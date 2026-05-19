@@ -127,7 +127,7 @@ public sealed class ContextAssembler
         var result = new List<string>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
 
-        foreach (var nodeId in routeNodeIds)
+        foreach (var nodeId in routeNodeIds.OrderBy(id => id, StringComparer.Ordinal))
         {
             var node = _query.GetNode(nodeId);
             if (node is null) continue;
@@ -195,7 +195,7 @@ public sealed class ContextAssembler
         }
 
         var entities = new List<string>();
-        foreach (var e in entitySet)
+        foreach (var e in entitySet.OrderBy(e => e, StringComparer.Ordinal))
         {
             var tokens = ContextBudgetEstimator.Estimate(e);
             if (budget.TryAllocate("metadata", tokens))
@@ -204,7 +204,7 @@ public sealed class ContextAssembler
         }
 
         var tables = new List<string>();
-        foreach (var t in tableSet)
+        foreach (var t in tableSet.OrderBy(t => t, StringComparer.Ordinal))
         {
             var tokens = ContextBudgetEstimator.Estimate(t);
             if (budget.TryAllocate("metadata", tokens))

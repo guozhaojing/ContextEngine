@@ -197,7 +197,7 @@ public sealed class EntityClassRegistry
         if (typeName.Length <= 1) return false;
         if (char.IsLower(typeName[0])) return false;
         if (typeName.StartsWith("T", StringComparison.Ordinal) && typeName.Length <= 2) return false;
-        if (System.Text.RegularExpressions.Regex.IsMatch(typeName, @"^T\d+$")) return false;
+        if (NamePatterns.IsGenericParameter(typeName)) return false;
 
         return true;
     }

@@ -103,16 +103,18 @@ Parses all `.cs` files for class declarations:
 
 ## GenericInvocationResolver
 
-Scans method bodies for invocation patterns using regex:
+**已全面迁移到 Roslyn InvocationExpressionSyntax + GenericNameSyntax**。
 
-1. **Direct generic calls**: `receiver.Method<GenericArg>(...)`
-2. **Session API**: receiver contains "session" → Exact
-3. **Repository pattern**: receiver type resolved via field/variable analysis → Medium-High
-4. **Class pattern**: method class matches Repository/DAO naming → High
+方法体调用解析：
+
+1. **直接泛型调用**：提取 `GenericNameSyntax.TypeArgumentList.Arguments` 中的显式泛型参数
+2. **Session API**：receiver 包含 "session" → Exact
+3. **Repository 模式**：通过 receiver 变量类型推导（类字段类型映射 + LocalDeclarationStatementSyntax 局部变量）
+4. **类模式匹配**：方法所属类匹配 Repository/DAO 命名 → High
 
 Detected API methods (18 each for session, repository, generic categories).
 
-Variable type analysis: parses field declarations (`private Repo<EQA_Reagent> _repo;`), var declarations, typed variable declarations, constructor parameter injection.
+Variable type analysis: 从 `FieldDeclarationSyntax`, `LocalDeclarationStatementSyntax`, `VariableDeclarationSyntax` 提取 — 不再使用 regex。
 
 ## RepositoryPatternDetector
 

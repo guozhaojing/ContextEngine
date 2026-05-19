@@ -1,12 +1,13 @@
 // =============================================================================
-// GenericResolution/NhSessionGenericAnalyzer.cs — NHibernate 泛型解析分析器
+// GenericResolution/NhSessionGenericAnalyzer.cs — NHibernate 泛型解析分析器 (Roslyn)
 // =============================================================================
 // IGraphAnalyzer 实现：
-//   1. 构建 GenericInheritanceMap 扫描所有 class 的泛型继承关系
+//   1. 构建 GenericInheritanceMap 扫描所有 class 的泛型继承关系 (Roslyn SyntaxTree)
 //   2. 检测 Repository/DAO/Service 模式
-//   3. 解析泛型方法调用中的 Entity 类型
+//   3. 解析泛型方法调用中的 Entity 类型 (Roslyn InvocationExpressionSyntax)
 //   4. 产出 nh:entity-access edges/facts/annotations
 //   5. 无缝集成到 SemanticTraversalEngine
+//   6. 所有子解析器统一使用 Roslyn，无 regex 依赖
 //
 // 解析策略：
 //   Exact:  显式泛型参数 (session.Query<EQA_Reagent>())
@@ -18,6 +19,7 @@
 using Core.Graph.Analysis;
 using Core.Graph.Identity;
 using Core.Models;
+using Core.Semantics;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -52,7 +54,6 @@ public sealed class NhSessionGenericAnalyzer : IGraphAnalyzer
             GeneratedAt = DateTime.UtcNow
         };
 
-        // Phase 1: 构建继承映射
         BuildInheritanceMap(context);
 
         _invocationResolver = new GenericInvocationResolver(_inheritanceMap);
@@ -60,7 +61,6 @@ public sealed class NhSessionGenericAnalyzer : IGraphAnalyzer
 
         ResolutionResult.ClassesScanned = _inheritanceMap.Count;
 
-        // Phase 1.5: 构建 Entity ↔ Class 双向注册表 (BLL/DAO 模式)
         _entityRegistry = new EntityClassRegistry();
         _entityRegistry.Build(_inheritanceMap);
         _daoFieldDetector = new DaoFieldDetector(_entityRegistry, _inheritanceMap);
@@ -81,20 +81,16 @@ public sealed class NhSessionGenericAnalyzer : IGraphAnalyzer
                 ResolutionResult.RecordEntityBinding(entityName, d.SourceFile, d.BindingPath);
         }
 
-        // Phase 2: 检测 Repository 模式
         var patternMatches = new Dictionary<string, PatternMatchResult>(StringComparer.Ordinal);
-        foreach (var (className, classInfo) in _inheritanceMap.Classes)
+        foreach (var (className, _) in _inheritanceMap.Classes)
         {
             var patternResult = new RepositoryPatternDetector().Detect(className);
             if (patternResult is not null && patternResult.IsRepositoryPattern)
-            {
                 patternMatches[className] = patternResult;
-            }
         }
 
         ResolutionResult.RepositoryClassesFound = patternMatches.Count;
 
-        // Phase 3: Per-file 解析
         var processedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var seenEdges = new HashSet<string>(StringComparer.Ordinal);
         var seenFacts = new HashSet<string>(StringComparer.Ordinal);
@@ -121,54 +117,56 @@ public sealed class NhSessionGenericAnalyzer : IGraphAnalyzer
 
         var registryEntities = _entityRegistry.AllEntities;
         Console.WriteLine($"  [Registry] Found {registryEntities.Count} entities from explicit generic bindings");
-        
+
         ResolutionResult.DiscoveredEntities = registryEntities.ToList();
         ResolutionResult.DiscoveredTables = ResolutionResult.DiscoveredEntities
             .Select(e => e + "s").ToList();
         ResolutionResult.TotalEntitiesDiscovered = ResolutionResult.DiscoveredEntities.Count;
         ResolutionResult.TotalTablesDiscovered = ResolutionResult.DiscoveredTables.Count;
+
+        RunDiagnostics(context);
     }
 
     private void BuildInheritanceMap(GraphAnalysisContext context)
     {
         _inheritanceMap = new GenericInheritanceMap();
-        
+
         var allFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var scanRoot = context.Scan.ScanRoot;
         var projectCount = 0;
         var totalCsFiles = 0;
-        
+
         foreach (var project in context.Scan.Projects)
         {
             try
             {
-                var absPath = Path.Combine(scanRoot, project.ProjectPath);
+                var absPath = Path.Combine(context.Scan.ScanRoot, project.ProjectPath);
                 string? projectDir;
-                
+
                 if (File.Exists(absPath))
                     projectDir = Path.GetDirectoryName(absPath);
                 else if (Directory.Exists(absPath))
                     projectDir = absPath;
                 else
                     continue;
-                
-                if (projectDir is null || !Directory.Exists(projectDir)) continue;
-                
+
+                if (projectDir is null || !Directory.Exists(projectDir))
+                    continue;
+
                 var csFiles = Directory.GetFiles(projectDir, "*.cs", SearchOption.AllDirectories);
                 foreach (var f in csFiles)
                     allFiles.Add(f);
-                
+
                 projectCount++;
                 totalCsFiles += csFiles.Length;
             }
             catch { }
         }
-        
+
         foreach (var unit in context.GetUnitsInScope())
             allFiles.Add(unit.FilePath);
-        
+
         Console.WriteLine($"  [InheritanceMap] Projects: {projectCount}, .cs files on disk: {totalCsFiles}, unique: {allFiles.Count}");
-        
+
         _inheritanceMap.BuildFromFiles(allFiles);
     }
 
@@ -183,12 +181,11 @@ public sealed class NhSessionGenericAnalyzer : IGraphAnalyzer
     {
         var sourceText = File.ReadAllText(filePath);
         var tree = CSharpSyntaxTree.ParseText(sourceText);
-        var root = tree.GetRoot();
+        var root = tree.GetCompilationUnitRoot();
 
         var unitById = fileUnits.ToDictionary(u => u.Id, StringComparer.Ordinal);
         var projectPath = fileUnits[0].ProjectPath;
 
-        // 建立类内字段类型映射（用于上下文推断）
         var classFieldTypes = BuildClassFieldTypeMap(root);
 
         foreach (var classDecl in root.DescendantNodes().OfType<ClassDeclarationSyntax>())
@@ -196,11 +193,14 @@ public sealed class NhSessionGenericAnalyzer : IGraphAnalyzer
             var className = GetFullClassName(classDecl);
             var classNs = GetNamespace(classDecl);
 
-            // 解析该 class 的泛型 entity binding
             var classEntities = ResolveClassEntityBindings(className, classNs, patternMatches);
 
-            // ④ BLL/DAO 字段检测：BLL 类中查找 DAO 字段 → 推导 Entity
-            var daoFields = _daoFieldDetector.DetectInClass(sourceText, relativePath, className);
+            var perClassFieldTypes = BuildPerClassFieldTypeMap(classDecl);
+            var mergedFieldTypes = new Dictionary<string, string>(classFieldTypes, StringComparer.Ordinal);
+            foreach (var (k, v) in perClassFieldTypes)
+                mergedFieldTypes[k] = v;
+
+            var daoFields = _daoFieldDetector.DetectFromClassDeclaration(classDecl);
 
             foreach (var method in classDecl.Members.OfType<MethodDeclarationSyntax>())
             {
@@ -212,7 +212,6 @@ public sealed class NhSessionGenericAnalyzer : IGraphAnalyzer
                 if (!context.NodesById.ContainsKey(methodId))
                     continue;
 
-                // ① Class-level entity resolution (from generic inheritance)
                 foreach (var entity in classEntities)
                 {
                     ProduceEntityAccess(
@@ -221,48 +220,45 @@ public sealed class NhSessionGenericAnalyzer : IGraphAnalyzer
                         relativePath, context, seenEdges, seenFacts, methodName, "");
                 }
 
-                // ② 解析方法体内的泛型调用
-                var methodContent = GetMethodContent(method, sourceText);
-                if (!string.IsNullOrEmpty(methodContent))
+                var invocations = _invocationResolver.ResolveInvocationsFromMethod(
+                    method, mergedFieldTypes, relativePath, className, projectPath);
+
+                foreach (var inv in invocations)
                 {
-                    var invocations = _invocationResolver.ResolveInvocations(
-                        methodContent, relativePath, className, projectPath);
-
-                    foreach (var inv in invocations)
+                    if (inv.Confidence >= GenericResolutionConfidence.Medium)
                     {
-                        if (inv.Confidence >= GenericResolutionConfidence.Medium)
-                        {
-                            ProduceEntityAccess(
-                                methodId, inv.EntityClass, "", inv.Confidence,
-                                $"invocation:{inv.ResolutionMethod}", className,
-                                relativePath, context, seenEdges, seenFacts,
-                                methodName, inv.Expression);
-                        }
+                        ProduceEntityAccess(
+                            methodId, inv.EntityClass, "", inv.Confidence,
+                            $"invocation:{inv.ResolutionMethod}", className,
+                            relativePath, context, seenEdges, seenFacts,
+                            methodName, inv.Expression);
                     }
-
-                    ResolutionResult.TotalInvocationsResolved += invocations.Count;
                 }
 
-                // ③ 检测方法名模式 (如 GetReagentList → reagent entity)
+                ResolutionResult.TotalInvocationsResolved += invocations.Count;
+
                 DetectMethodNamePattern(methodId, methodName, className,
                     relativePath, context, seenEdges, seenFacts, patternMatches);
 
-                // ⑤ BLL→DAO 调用传播：方法体中调用 DAO 方法 → 推导 Entity
-                if (daoFields.Count > 0 && methodContent is not null)
+                if (daoFields.Count > 0)
                 {
-                    var daoCallSites = _daoCallSiteResolver.Resolve(
-                        methodContent, daoFields, className);
-
-                    foreach (var callSite in daoCallSites)
+                    var methodBody = (SyntaxNode?)method.Body ?? method.ExpressionBody;
+                    if (methodBody is not null)
                     {
-                        if (callSite.Confidence >= GenericResolutionConfidence.Medium)
+                        var daoCallSites = _daoCallSiteResolver.Resolve(
+                            methodBody, daoFields, className);
+
+                        foreach (var callSite in daoCallSites)
                         {
-                            ProduceEntityAccess(
-                                methodId, callSite.EntityName, "", callSite.Confidence,
-                                $"dao-call:{callSite.DaoClassName}.{callSite.CalledMethod}",
-                                className, relativePath, context,
-                                seenEdges, seenFacts, methodName,
-                                $"{callSite.DaoFieldName}.{callSite.CalledMethod}()");
+                            if (callSite.Confidence >= GenericResolutionConfidence.Medium)
+                            {
+                                ProduceEntityAccess(
+                                    methodId, callSite.EntityName, "", callSite.Confidence,
+                                    $"dao-call:{callSite.DaoClassName}.{callSite.CalledMethod}",
+                                    className, relativePath, context,
+                                    seenEdges, seenFacts, methodName,
+                                    $"{callSite.DaoFieldName}.{callSite.CalledMethod}()");
+                            }
                         }
                     }
                 }
@@ -277,7 +273,6 @@ public sealed class NhSessionGenericAnalyzer : IGraphAnalyzer
     {
         var results = new List<EntityResolution>();
 
-        // 从继承映射解析
         var classInfo = _inheritanceMap.FindClass(className, classNs);
         if (classInfo is not null)
         {
@@ -285,7 +280,6 @@ public sealed class NhSessionGenericAnalyzer : IGraphAnalyzer
             results.AddRange(resolved);
         }
 
-        // 从 pattern 匹配提取 entity name
         PatternMatchResult? matchedPattern = null;
         if (patternMatches.TryGetValue(className, out var exactPattern))
         {
@@ -321,7 +315,6 @@ public sealed class NhSessionGenericAnalyzer : IGraphAnalyzer
         HashSet<string> seenFacts,
         Dictionary<string, PatternMatchResult> patternMatches)
     {
-        // 如果方法名中包含已知的 entity 名，添加匹配
         foreach (var (_, classInfo) in _inheritanceMap.Classes)
         {
             if (classInfo.TypeParameters.Count == 0)
@@ -334,7 +327,6 @@ public sealed class NhSessionGenericAnalyzer : IGraphAnalyzer
             var methodLower = methodName.ToLowerInvariant();
             var entityLower = entityName.ToLowerInvariant();
 
-            // GetXxx / FindXxx / SaveXxx 等模式
             if (methodLower.StartsWith("get", StringComparison.Ordinal)
                 || methodLower.StartsWith("find", StringComparison.Ordinal)
                 || methodLower.StartsWith("save", StringComparison.Ordinal)
@@ -357,7 +349,6 @@ public sealed class NhSessionGenericAnalyzer : IGraphAnalyzer
             }
         }
 
-        // 检查类的 pattern → 方法可能是 entity 操作
         if (patternMatches.TryGetValue(className, out var classPattern)
             && classPattern.EntityType is not null)
         {
@@ -400,7 +391,6 @@ public sealed class NhSessionGenericAnalyzer : IGraphAnalyzer
         var entityNodeId = BuildEntityNodeId(entityNamespace, entityClass, table);
         var stdConfidence = confidence.ToStandardConfidence();
 
-        // Fact
         var factKey = $"{methodId}|generic:{entityClass}|{resolutionMethod}";
         if (seenFacts.Add(factKey))
         {
@@ -424,14 +414,12 @@ public sealed class NhSessionGenericAnalyzer : IGraphAnalyzer
             ResolutionResult.FactsProduced++;
         }
 
-        // Annotation
         context.AddAnnotation(methodId, "generic:resolved", entityClass, relativePath);
         context.AddAnnotation(methodId, "entity", entityClass, relativePath);
         context.AddAnnotation(methodId, "table", table, relativePath);
         context.AddAnnotation(methodId, "api", "generic", relativePath);
         ResolutionResult.AnnotationsProduced++;
 
-        // ExtraEdge
         if (confidence >= GenericResolutionConfidence.Medium)
         {
             var edgeKey = $"{methodId}→{entityNodeId}:{EdgeKindEntityAccess}";
@@ -462,7 +450,6 @@ public sealed class NhSessionGenericAnalyzer : IGraphAnalyzer
             }
         }
 
-        // 记录到结果
         ResolutionResult.Record(methodId, entityClass, entityNamespace,
             table, confidence, resolutionMethod, viaClass, relativePath);
     }
@@ -479,9 +466,7 @@ public sealed class NhSessionGenericAnalyzer : IGraphAnalyzer
                 {
                     var typeName = field.Declaration.Type.ToString();
                     foreach (var variable in field.Declaration.Variables)
-                    {
                         fieldTypes[variable.Identifier.Text] = typeName;
-                    }
                 }
                 else if (member is PropertyDeclarationSyntax property)
                 {
@@ -494,16 +479,26 @@ public sealed class NhSessionGenericAnalyzer : IGraphAnalyzer
         return fieldTypes;
     }
 
-    private static string GetMethodContent(MethodDeclarationSyntax method, string sourceText)
+    private static Dictionary<string, string> BuildPerClassFieldTypeMap(ClassDeclarationSyntax classDecl)
     {
-        if (method.Body is not null)
-            return method.Body.ToString();
+        var fieldTypes = new Dictionary<string, string>(StringComparer.Ordinal);
 
-        if (method.ExpressionBody is not null)
-            return method.ExpressionBody.ToString();
+        foreach (var member in classDecl.Members)
+        {
+            if (member is FieldDeclarationSyntax field)
+            {
+                var typeName = field.Declaration.Type.ToString();
+                foreach (var variable in field.Declaration.Variables)
+                    fieldTypes[variable.Identifier.Text] = typeName;
+            }
+            else if (member is PropertyDeclarationSyntax property)
+            {
+                var typeName = property.Type.ToString();
+                fieldTypes[property.Identifier.Text] = typeName;
+            }
+        }
 
-        // Fallback: get from source text span
-        return sourceText.Substring(method.Span.Start, method.Span.Length);
+        return fieldTypes;
     }
 
     private static string GetFullClassName(ClassDeclarationSyntax classDecl)
@@ -546,7 +541,135 @@ public sealed class NhSessionGenericAnalyzer : IGraphAnalyzer
     {
         if (string.IsNullOrEmpty(className))
             return "unknown";
-
         return className + "s";
+    }
+
+    private void RunDiagnostics(GraphAnalysisContext context)
+    {
+        var diagnostics = new List<GenericDiagnostic>();
+
+        diagnostics.AddRange(DetectDuplicateEntitySources());
+        diagnostics.AddRange(DetectAmbiguousGenericBindings());
+        diagnostics.AddRange(DetectOrphanPropagationEdges(context));
+
+        ResolutionResult.Diagnostics = diagnostics;
+    }
+
+    private List<GenericDiagnostic> DetectDuplicateEntitySources()
+    {
+        var diags = new List<GenericDiagnostic>();
+        var entitySources = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+
+        foreach (var binding in _entityRegistry.ClassToBinding.Values)
+        {
+            if (!entitySources.ContainsKey(binding.EntityType))
+                entitySources[binding.EntityType] = new List<string>();
+            entitySources[binding.EntityType].Add($"{binding.ClassName} ({binding.BindingPath})");
+        }
+
+        foreach (var (entity, sources) in entitySources)
+        {
+            if (sources.Count > 1)
+            {
+                diags.Add(new GenericDiagnostic
+                {
+                    Severity = DiagnosticSeverity.Info,
+                    Category = "duplicate-entity-source",
+                    Message = $"Entity '{entity}' has {sources.Count} class bindings: {string.Join(", ", sources)}",
+                    EntityClass = entity
+                });
+            }
+        }
+
+        return diags;
+    }
+
+    private List<GenericDiagnostic> DetectAmbiguousGenericBindings()
+    {
+        var diags = new List<GenericDiagnostic>();
+
+        foreach (var (fullName, classInfo) in _inheritanceMap.Classes)
+        {
+            foreach (var baseType in classInfo.BaseTypes)
+            {
+                if (!baseType.IsGeneric || baseType.TypeArguments.Count == 0)
+                    continue;
+
+                for (var i = 0; i < baseType.TypeArguments.Count; i++)
+                {
+                    var arg = baseType.TypeArguments[i];
+                    if (IsGenericParameter(arg))
+                    {
+                        var concrete = _inheritanceMap.ResolveConcreteType(classInfo, arg);
+                        if (concrete is null)
+                        {
+                            var bindings = _inheritanceMap.ResolveTypeParameter(classInfo, arg);
+                            if (bindings.Count == 0)
+                            {
+                                diags.Add(new GenericDiagnostic
+                                {
+                                    Severity = DiagnosticSeverity.Warning,
+                                    Category = "unresolved-generic-binding",
+                                    Message = $"Unresolved generic parameter '{arg}' in class '{fullName}' via base type '{baseType.FullName}'",
+                                    EntityClass = fullName,
+                                    ContextClass = baseType.FullName
+                                });
+                            }
+                            else if (bindings.Count > 1)
+                            {
+                                diags.Add(new GenericDiagnostic
+                                {
+                                    Severity = DiagnosticSeverity.Warning,
+                                    Category = "ambiguous-generic-binding",
+                                    Message = $"Ambiguous binding for '{arg}' in '{fullName}': found {bindings.Count} possible bindings",
+                                    EntityClass = fullName,
+                                    ContextClass = baseType.FullName
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return diags;
+    }
+
+    private List<GenericDiagnostic> DetectOrphanPropagationEdges(GraphAnalysisContext context)
+    {
+        var diags = new List<GenericDiagnostic>();
+
+        foreach (var edge in context.Result.ExtraEdges)
+        {
+            if (edge.Kind == EdgeKindEntityAccess)
+            {
+                if (string.IsNullOrEmpty(edge.FromId) || string.IsNullOrEmpty(edge.ToId))
+                {
+                    diags.Add(new GenericDiagnostic
+                    {
+                        Severity = DiagnosticSeverity.Warning,
+                        Category = "orphan-propagation-edge",
+                        Message = $"Orphan edge from '{edge.FromId}' to '{edge.ToId}': missing source or target",
+                        EntityClass = edge.FromId,
+                        ContextClass = edge.ToId
+                    });
+                }
+            }
+        }
+
+        return diags;
+    }
+
+    private static bool IsGenericParameter(string typeName)
+    {
+        if (string.IsNullOrWhiteSpace(typeName))
+            return false;
+        if (typeName.Length == 1 && char.IsUpper(typeName[0]))
+            return true;
+        if (typeName.StartsWith("T", StringComparison.Ordinal) && typeName.Length <= 2)
+            return true;
+        if (NamePatterns.IsGenericParameter(typeName))
+            return true;
+        return false;
     }
 }

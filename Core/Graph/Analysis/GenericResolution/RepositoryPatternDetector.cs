@@ -5,8 +5,6 @@
 // 输出 PatternMatchResult 包含 entity type 和 pattern 类型。
 // =============================================================================
 
-using System.Text.RegularExpressions;
-
 namespace Core.Graph.Analysis.GenericResolution;
 
 public sealed class RepositoryPatternDetector
@@ -167,15 +165,29 @@ public sealed class RepositoryPatternDetector
     /// </summary>
     public static string? ExtractEntityFromGenericType(string genericTypeName)
     {
-        var match = Regex.Match(genericTypeName, @"<([^>]+)>");
-        if (!match.Success)
+        var lt = genericTypeName.IndexOf('<');
+        if (lt < 0)
             return null;
 
-        var typeArg = match.Groups[1].Value.Trim();
+        var depth = 0;
+        var end = -1;
+        for (var i = lt + 1; i < genericTypeName.Length; i++)
+        {
+            if (genericTypeName[i] == '<') depth++;
+            else if (genericTypeName[i] == '>')
+            {
+                if (depth == 0) { end = i; break; }
+                depth--;
+            }
+        }
 
-        // 排除非 entity 的泛型参数
+        if (end < 0)
+            return null;
+
+        var typeArg = genericTypeName[(lt + 1)..end].Trim();
+
         if (typeArg is "T" or "TEntity" or "TKey" or "TValue"
-            || Regex.IsMatch(typeArg, @"^T\d+$"))
+            || IsGenericParameterName(typeArg))
             return null;
 
         if (new[] { "int", "string", "long", "bool", "Guid", "DateTime", "object" }
@@ -183,6 +195,18 @@ public sealed class RepositoryPatternDetector
             return null;
 
         return typeArg;
+    }
+
+    private static bool IsGenericParameterName(string typeName)
+    {
+        if (!typeName.StartsWith("T", StringComparison.Ordinal) || typeName.Length == 0)
+            return false;
+        if (typeName.Length == 1)
+            return true;
+        for (var i = 1; i < typeName.Length; i++)
+            if (!char.IsDigit(typeName[i]))
+                return false;
+        return true;
     }
 }
 

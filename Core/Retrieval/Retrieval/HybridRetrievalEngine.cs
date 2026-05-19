@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Core.Retrieval.Chunking;
 using Core.Retrieval.Embedding;
 using Core.Retrieval.VectorStore;
+using Core.Truth;
 
 namespace Core.Retrieval.Retrieval;
 
@@ -33,9 +34,15 @@ public sealed class HybridRetrievalEngine
         // 2. Vector search (top K * 3 for recall)
         var vectorResults = _vectorStore.Search(queryVector, query.TopK * 3);
 
-        // 3. Enrich with graph metadata + compute fused scores
+        // 3. Enrich with graph metadata + compute fused scores via EvidenceFusion
         var candidates = new List<RetrievalCandidate>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        var fusionContext = new EvidenceFusionContext
+        {
+            PreferredEntities = query.PreferredEntities,
+            PreferredTables = query.PreferredTables,
+        };
 
         foreach (var vr in vectorResults)
         {
@@ -48,37 +55,26 @@ public sealed class HybridRetrievalEngine
             // Confidence filter
             if (metadata.ConfidenceScore < query.MinConfidence) continue;
 
-            var graphRel = RetrievalFusion.ComputeGraphRelevance(
-                metadata.EntryPointDistance,
-                metadata.DataAccessDistance,
-                metadata.FanIn,
-                metadata.FanOut);
+            var fusionResult = EvidenceFusionEngine.Fuse(vr, chunk, fusionContext);
 
-            var businessRel = RetrievalFusion.ComputeBusinessRelevance(
-                metadata.IsEntryPoint,
-                metadata.IsEntityAccess,
-                metadata.BusinessScore,
-                query.PreferredEntities,
-                query.PreferredTables);
-
-            var fused = RetrievalFusion.ComputeFusedScore(
-                vr,
-                graphRel,
-                businessRel,
-                chunk.ImportanceScore);
+            if (fusionResult.OverallEvidence < EvidenceStrength.SyntaxPattern)
+                continue;
 
             candidates.Add(new RetrievalCandidate
             {
                 Chunk = chunk,
                 VectorSimilarity = Math.Round(vr.Similarity, 4),
-                GraphRelevance = Math.Round(graphRel, 4),
-                BusinessRelevance = Math.Round(businessRel, 4),
-                FusedScore = fused
+                GraphRelevance = fusionResult.GraphScore,
+                BusinessRelevance = fusionResult.BusinessScore,
+                FusedScore = fusionResult.FusedScore,
             });
         }
 
-        // 4. Sort by fused score, then take top K
-        candidates.Sort((a, b) => b.FusedScore.CompareTo(a.FusedScore));
+        // 4. Sort by fused score, stable tie-break by ChunkId
+        candidates = candidates
+            .OrderByDescending(a => a.FusedScore)
+            .ThenBy(a => a.Chunk.ChunkId, StringComparer.Ordinal)
+            .ToList();
         var topK = candidates.Take(query.TopK).ToList();
 
         // 5. Expand paths if requested
@@ -87,9 +83,12 @@ public sealed class HybridRetrievalEngine
             ExpandWithRelatedPaths(topK, seen, query.TopK);
         }
 
-        // Re-sort after expansion
-        topK.Sort((a, b) => b.FusedScore.CompareTo(a.FusedScore));
-        topK = topK.Take(query.TopK).ToList();
+        // Re-sort after expansion, stable tie-break
+        topK = topK
+            .OrderByDescending(a => a.FusedScore)
+            .ThenBy(a => a.Chunk.ChunkId, StringComparer.Ordinal)
+            .Take(query.TopK)
+            .ToList();
 
         sw.Stop();
 
@@ -110,16 +109,19 @@ public sealed class HybridRetrievalEngine
     {
         var toAdd = new List<RetrievalCandidate>();
 
+        var sortedChunks = _chunkIndex
+            .OrderBy(kvp => kvp.Key, StringComparer.Ordinal)
+            .ToList();
+
         foreach (var candidate in candidates)
         {
             if (candidates.Count + toAdd.Count >= maxResults * 2) break;
 
             var chunk = candidate.Chunk;
 
-            // Find upstream/downstream chunks via shared entity/table
-            foreach (var table in chunk.Metadata?.RelatedTables ?? Array.Empty<string>())
+            foreach (var table in (chunk.Metadata?.RelatedTables ?? Array.Empty<string>()).OrderBy(t => t, StringComparer.Ordinal))
             {
-                foreach (var (id, other) in _chunkIndex)
+                foreach (var (id, other) in sortedChunks)
                 {
                     if (seen.Contains(id)) continue;
                     if (other.Metadata?.RelatedTables?.Contains(table, StringComparer.OrdinalIgnoreCase) == true)
@@ -137,6 +139,11 @@ public sealed class HybridRetrievalEngine
                 }
             }
         }
+
+        toAdd = toAdd
+            .OrderByDescending(a => a.FusedScore)
+            .ThenBy(a => a.Chunk.ChunkId, StringComparer.Ordinal)
+            .ToList();
 
         candidates.AddRange(toAdd);
     }

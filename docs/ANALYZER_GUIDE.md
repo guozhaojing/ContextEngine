@@ -221,12 +221,40 @@ var orchestrator = new CodeGraphAnalysisOrchestrator(new IGraphAnalyzer[]
 | Fact | `factType: "spring-bean"` |
 | Edge | `spring:implements` (接口方法→实现方法), `spring:property-ref` (Bean→Bean) |
 
+### NHibernateAnalyzer (`"nh-hql"`)
+
+| 项目 | 说明 |
+|------|------|
+| 目标 | NHibernate Session API 直接调用 + HQL 字符串追踪 |
+| 识别 | `session.Query<T>()`, `session.Save()`, `session.Get<T>()` 等 26 种 API |
+| HQL | 从字符串字面量提取实体名、SQL FROM 子句 |
+| HBM | 解析 `.hbm.xml` 获取 Entity↔Table 映射 |
+| Fact | `factType: "nh-entity-access"`, `"nh-hql"`, `"nh-sql"` |
+| Edge | `nh:entity-access` (method → Entity Node) |
+| Annotation | `entity`, `table`, `api` |
+
+### NhSessionGenericAnalyzer (`"nh-generic-resolution"`)
+
+| 项目 | 说明 |
+|------|------|
+| 目标 | 泛型继承链 + Repository/DAO 模式解析 |
+| 识别 | `class X : BaseBLL<T>` → T=Entity, `class Y : BaseDaoNHB<T,T1>` → T=Entity |
+| 继承映射 | **Roslyn SyntaxTree** 解析所有 class/interface 声明，构建继承树 |
+| 调用解析 | **Roslyn InvocationExpressionSyntax** 提取方法体泛型调用 |
+| 字段检测 | **Roslyn FieldDeclarationSyntax** 检测 BLL 中的 DAO 字段 |
+| 调用传播 | **Roslyn MemberAccessExpressionSyntax** 追踪 `_dao.Method()` 调用 |
+| 置信度 | 5 级：Exact / High / Medium / Low / None |
+| Fact | `factType: "nh-entity-access"` (带 `viaClass`, `resolution`, `generic:resolved`) |
+| Edge | `nh:entity-access` (method → ext::nh:entity::{NS}.{Class}::{Table}) |
+| Annotation | `generic:resolved`, `entity`, `table`, `api` |
+| 诊断 | unresolved-generic-binding, ambiguous-generic-binding, duplicate-entity-source, orphan-propagation-edge |
+| 文件 | `Core/Graph/Analysis/GenericResolution/` (12 文件) |
+
 ## 9. 计划中的 Analyzer
 
 | Analyzer | 目标 | 建议 factType / kind |
 |----------|------|---------------------|
 | EfSqlAnalyzer | Entity Framework / EF Core | `"ef-sql"` |
-| NHibernateAnalyzer | NHibernate HQL / XML | `"nh-hql"` / `"nh:query"` |
 | MediatRAnalyzer | MediatR Request/Handler | `"mediatr:handler"` 边 |
 | DapperAnalyzer | Dapper SQL 字符串 | `"dapper-sql"` |
 
@@ -261,7 +289,21 @@ Core/Graph/Analysis/
 ├── GraphAnalysisScope.cs               全量 / 增量范围
 ├── GraphAnalysisMergeService.cs        合并入图（深拷贝 + 增量清理）
 ├── CodeGraphAnalysisOrchestrator.cs    编排入口
-└── Analyzers/
-    ├── AspNetRouteAnalyzer.cs          ASP.NET 路由分析
-    └── SpringBeanAnalyzer.cs           Spring.NET Bean 分析
+├── Analyzers/
+│   ├── AspNetRouteAnalyzer.cs          ASP.NET 路由分析
+│   ├── SpringBeanAnalyzer.cs           Spring.NET Bean 分析
+│   └── NHibernateAnalyzer.cs           NHibernate HQL / Session API 分析
+└── GenericResolution/
+    ├── GenericInheritanceMap.cs         类继承映射 (Roslyn SyntaxTree)
+    ├── GenericTypeResolver.cs           泛型类型参数解析
+    ├── GenericInvocationResolver.cs     泛型调用解析 (Roslyn)
+    ├── DaoFieldDetector.cs              DAO 字段检测 (Roslyn)
+    ├── DaoCallSiteResolver.cs           BLL→DAO 调用传播 (Roslyn)
+    ├── EntityClassRegistry.cs           Entity↔Class 双向映射
+    ├── RepositoryPatternDetector.cs     Repository 模式检测
+    ├── NhSessionGenericAnalyzer.cs      泛型解析编排 (IGraphAnalyzer)
+    ├── GenericResolutionResult.cs       结果收集 + Origin Trace
+    ├── GenericResolutionConfidence.cs   5 级置信度
+    ├── GenericEntityAccessFact.cs       泛型 Entity Access 事实
+    └── NamePatterns.cs                 命名模式工具
 ```

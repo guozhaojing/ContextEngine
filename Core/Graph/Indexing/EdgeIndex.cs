@@ -44,7 +44,12 @@ public sealed class EdgeIndex
                 Kind = edge.Kind,
                 Label = edge.Call,
                 IsResolved = edge.IsResolved,
-                Attributes = edge.Attributes
+                Attributes = edge.Attributes,
+                Source = edge.Source,
+                Confidence = edge.Confidence,
+                Evidence = edge.Evidence,
+                PropagationDepth = edge.PropagationDepth,
+                Grounded = edge.Grounded,
             });
 
             // Incoming: to ← edges
@@ -60,7 +65,12 @@ public sealed class EdgeIndex
                 Kind = edge.Kind,
                 Label = edge.Call,
                 IsResolved = edge.IsResolved,
-                Attributes = edge.Attributes
+                Attributes = edge.Attributes,
+                Source = edge.Source,
+                Confidence = edge.Confidence,
+                Evidence = edge.Evidence,
+                PropagationDepth = edge.PropagationDepth,
+                Grounded = edge.Grounded,
             });
         }
 

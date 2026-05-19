@@ -98,8 +98,8 @@ class C<T> : D<T> {} // etc.
 | Scanning | O(files × methods). 29 projects, 2,547 CodeUnits → ~10-30s |
 | Graph building | O(edges). 14,230 edges → <1s |
 | NHibernateAnalyzer | O(files × invocations). Full syntax tree parse per file |
-| NhSessionGenericAnalyzer | O(files × class_declarations × invocations). Heavy regex work |
-| GenericInheritanceMap | O(files). Full text read + regex per file |
+| NhSessionGenericAnalyzer | O(files × class_declarations × invocations). Roslyn SyntaxTree traversal per file |
+| GenericInheritanceMap | O(files). Roslyn CSharpSyntaxTree.ParseText per file, 已替代 regex |
 | SemanticTraversal | O(branches^depth). Bounded by MaxPaths (200) |
 | Query Understanding | O(vocabulary_size × query_tokens). Lightweight |
 

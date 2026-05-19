@@ -39,9 +39,23 @@ public static class LayerInference
             return Controller;
         if (className.EndsWith("Service", StringComparison.Ordinal))
             return Service;
+        if (className.EndsWith("BLL", StringComparison.Ordinal))
+            return Service;
+        if (className.EndsWith("Manager", StringComparison.Ordinal))
+            return Service;
+        if (className.EndsWith("Provider", StringComparison.Ordinal))
+            return Service;
+        if (className.EndsWith("Handler", StringComparison.Ordinal))
+            return Service;
         if (className.EndsWith("Repository", StringComparison.Ordinal))
             return Repository;
         if (className.EndsWith("Dao", StringComparison.Ordinal))
+            return Repository;
+        if (className.EndsWith("DaoNHB", StringComparison.Ordinal))
+            return Repository;
+        if (className.EndsWith("DAO", StringComparison.Ordinal))
+            return Repository;
+        if (className.Contains("Dao", StringComparison.Ordinal))
             return Repository;
 
         return Method;

@@ -9,8 +9,6 @@
 //   4. 解析 typeof(T) / GetType() 反射模式
 // =============================================================================
 
-using System.Text.RegularExpressions;
-
 namespace Core.Graph.Analysis.GenericResolution;
 
 public sealed class GenericTypeResolver
@@ -250,7 +248,7 @@ public sealed class GenericTypeResolver
             or "T" or "TEntity" or "TKey" or "TValue")
             return false;
 
-        if (Regex.IsMatch(typeName, @"^T\d*$"))
+        if (IsGenericParameterName(typeName))
             return false;
 
         if (typeName.EndsWith("Exception", StringComparison.Ordinal)
@@ -260,6 +258,18 @@ public sealed class GenericTypeResolver
             return false;
 
         return char.IsUpper(typeName[0]);
+    }
+
+    private static bool IsGenericParameterName(string typeName)
+    {
+        if (!typeName.StartsWith("T", StringComparison.Ordinal) || typeName.Length == 0)
+            return false;
+        if (typeName.Length == 1)
+            return true;
+        for (var i = 1; i < typeName.Length; i++)
+            if (!char.IsDigit(typeName[i]))
+                return false;
+        return true;
     }
 }
 
