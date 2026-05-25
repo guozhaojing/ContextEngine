@@ -272,20 +272,22 @@ public sealed class ContextEngineMcpTools
         return new { fromId, toId, paths = result, total = result.Count };
     }
 
-    // ── Cognitive tools ──
+    // ── Cognitive tools (public typed API + private MCP wrappers) ──
 
-    private object Ask(Dictionary<string, JsonElement> args)
+    /// <summary>Ask a natural language question about the loaded codebase.</summary>
+    public object Ask(string question)
     {
         EnsureSession();
-        var question = GetStringArg(args, "question");
         var result = _session!.Query(question);
         return SerializeCognitionResult(result);
     }
+    private object Ask(Dictionary<string, JsonElement> args)
+        => Ask(GetStringArg(args, "question"));
 
-    private object Verify(Dictionary<string, JsonElement> args)
+    /// <summary>Verify the trustworthiness of a cognition result.</summary>
+    public object Verify(string question)
     {
         EnsureSession();
-        var question = GetStringArg(args, "question");
         var result = _session!.Query(question);
 
         var epistemic = new EpistemicBoundary(_session.QueryService!).Analyze(result, question);
@@ -340,11 +342,13 @@ public sealed class ContextEngineMcpTools
             },
         };
     }
+    private object Verify(Dictionary<string, JsonElement> args)
+        => Verify(GetStringArg(args, "question"));
 
-    private object SelfCritique(Dictionary<string, JsonElement> args)
+    /// <summary>Generate an honest system self-critique of a cognition response.</summary>
+    public object SelfCritique(string question)
     {
         EnsureSession();
-        var question = GetStringArg(args, "question");
         var result = _session!.Query(question);
 
         var epistemic = new EpistemicBoundary(_session.QueryService!).Analyze(result, question);
@@ -381,11 +385,13 @@ public sealed class ContextEngineMcpTools
             },
         };
     }
+    private object SelfCritique(Dictionary<string, JsonElement> args)
+        => SelfCritique(GetStringArg(args, "question"));
 
-    private object EpistemicBoundary(Dictionary<string, JsonElement> args)
+    /// <summary>Analyze the epistemic boundary of a cognition result.</summary>
+    public object EpistemicBoundary(string question)
     {
         EnsureSession();
-        var question = GetStringArg(args, "question");
         var result = _session!.Query(question);
 
         var epistemic = new Core.Cognition.Epistemics.EpistemicBoundary(_session.QueryService!);
@@ -426,11 +432,13 @@ public sealed class ContextEngineMcpTools
             }).ToList(),
         };
     }
+    private object EpistemicBoundary(Dictionary<string, JsonElement> args)
+        => EpistemicBoundary(GetStringArg(args, "question"));
 
-    private object Patch(Dictionary<string, JsonElement> args)
+    /// <summary>Generate a grounded code patch for a modification request.</summary>
+    public object Patch(string request)
     {
         EnsureSession();
-        var request = GetStringArg(args, "request");
 
         var conventionAnalyzer = new ConventionAnalyzer(_session!.QueryService!);
         var planner = new PatchPlanner(
@@ -486,6 +494,8 @@ public sealed class ContextEngineMcpTools
             }).ToList(),
         };
     }
+    private object Patch(Dictionary<string, JsonElement> args)
+        => Patch(GetStringArg(args, "request"));
 
     // ── Helpers ──
 

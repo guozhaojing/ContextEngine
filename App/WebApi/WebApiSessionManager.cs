@@ -5,14 +5,9 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using App.Infrastructure;
 using Core.Cognition;
-using Core.Graph;
-using Core.Cognition.Epistemics;
-using Core.Cognition.Patching;
 using Core.Experience;
+using Core.Graph;
 using Core.Observability;
-using Core.ReasoningUX;
-using Core.SelfValidation;
-using Core.Verification;
 
 namespace App.WebApi;
 
@@ -189,55 +184,6 @@ public sealed class WebApiSessionManager
         };
     }
 
-    public CognitionResult? Query(string question)
-    {
-        if (_session is null || !_session.IsLoaded) return null;
-        if (_interactive is null) _interactive = new InteractiveCognitionSession(_session);
-
-        var response = _interactive.Ask(question);
-        var result = response.CognitionResult;
-
-        return result;
-    }
-
-    public FollowUpResult? FollowUp(string question)
-    {
-        if (_interactive is null) return null;
-
-        var response = _interactive.FollowUp(question);
-
-        return new FollowUpResult
-        {
-            Result = response.CognitionResult,
-            FormattedResponse = response.FormattedResponse,
-            SuggestedFollowUps = response.SuggestedFollowUps,
-        };
-    }
-
-    public CognitionResult? ExploreArchitecture(string query)
-    {
-        if (_session is null || !_session.IsLoaded) return null;
-        return _session.ExploreArchitecture(query);
-    }
-
-    public CognitionResult? AnalyzeImpact(string query)
-    {
-        if (_session is null || !_session.IsLoaded) return null;
-        return _session.AnalyzeImpact(query);
-    }
-
-    public CognitionResult? MapCapabilities(string query)
-    {
-        if (_session is null || !_session.IsLoaded) return null;
-        return _session.MapCapabilities(query);
-    }
-
-    public CognitionResult? ExploreRootCause(string query)
-    {
-        if (_session is null || !_session.IsLoaded) return null;
-        return _session.ExploreRootCause(query);
-    }
-
     public SessionInfo GetSessionInfo()
     {
         if (_session is null || !_session.IsLoaded)
@@ -262,65 +208,6 @@ public sealed class WebApiSessionManager
         };
     }
 
-    public string GetFormattedResponse(CognitionResult result, string query, string routing)
-    {
-        if (_session?.Formatter is null) return result.Format();
-        return _session.Formatter.FormatWithSummary(result, query, routing);
-    }
-
-    // ── 验证与自评 ──
-
-    public VerificationReport? Verify(CognitionResult result)
-    {
-        if (_session?.GraphIndex is null) return null;
-        var epistemic = new EpistemicBoundary(_session.QueryService!).Analyze(result, result.Query);
-        var orchestrator = new VerificationOrchestrator();
-        return orchestrator.Verify(result, epistemic);
-    }
-
-    public SelfCritique? SelfCritique(CognitionResult result)
-    {
-        if (_session?.GraphIndex is null) return null;
-        var epistemic = new EpistemicBoundary(_session.QueryService!).Analyze(result, result.Query);
-        var evaluator = new ResponseSelfEvaluator();
-        var evaluation = evaluator.Evaluate(result, epistemic);
-        var riskAnalyzer = new EpistemicRiskAnalyzer();
-        var riskReport = riskAnalyzer.Analyze(result, epistemic);
-        var gapDetector = new InvestigationGapDetector();
-        var gapReport = gapDetector.Detect(result, epistemic);
-        var critiqueGen = new SelfCritiqueGenerator();
-        return critiqueGen.Generate(evaluation, riskReport, gapReport, result);
-    }
-
-    // ── 补丁 ──
-
-    public ExplainThenPatchResult? Patch(string request)
-    {
-        if (_session?.QueryService is null || _session?.ConfidenceEngine is null) return null;
-        var conventionAnalyzer = new ConventionAnalyzer(_session.QueryService);
-        var planner = new PatchPlanner(_session.QueryService, conventionAnalyzer,
-            _session.ArchitectureExplorer!, _session.ImpactAnalyzer!);
-        var generator = new GroundedPatchGenerator();
-        var validator = new PatchImpactValidator(_session.QueryService, _session.ConfidenceEngine);
-        var etp = new ExplainThenPatch(planner, generator, validator);
-        return etp.ExplainAndPatch(request, _session.RepositoryName);
-    }
-
-    // ── 渐进呈现 ──
-
-    public ProgressiveResponse? Present(CognitionResult result)
-    {
-        if (_session?.GraphIndex is null) return null;
-        var epistemic = new EpistemicBoundary(_session.QueryService!).Analyze(result, result.Query);
-        var evaluator = new ResponseSelfEvaluator();
-        var evaluation = evaluator.Evaluate(result, epistemic);
-        var riskAnalyzer = new EpistemicRiskAnalyzer();
-        var riskReport = riskAnalyzer.Analyze(result, epistemic);
-        var gapDetector = new InvestigationGapDetector();
-        var gapReport = gapDetector.Detect(result, epistemic);
-        var engine = new ReasoningPresentationEngine();
-        return engine.Present(result, epistemic, evaluation, riskReport, gapReport);
-    }
 }
 
 public sealed class LoadResult
@@ -332,13 +219,6 @@ public sealed class LoadResult
     public int EdgeCount { get; init; }
     public int ProjectCount { get; init; }
     public bool FromCache { get; init; }
-}
-
-public sealed class FollowUpResult
-{
-    public required CognitionResult Result { get; init; }
-    public string FormattedResponse { get; init; } = "";
-    public required IReadOnlyList<string> SuggestedFollowUps { get; init; }
 }
 
 public sealed class SessionInfo
