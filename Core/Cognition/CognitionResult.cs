@@ -85,6 +85,14 @@ public enum CognitionResultType
     RootCauseAnalysis = 3,
 }
 
+public enum CognitionTaskType
+{
+    ArchitectureExplanation = 0,
+    ImpactAnalysis = 1,
+    RootCauseAnalysis = 2,
+    CapabilityMapping = 3,
+}
+
 public sealed class GroundedExplanation : IEquatable<GroundedExplanation>
 {
     public required string ExplanationId { get; init; }

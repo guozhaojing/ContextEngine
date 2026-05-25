@@ -78,6 +78,9 @@ public class ProjectCodeScanner
             group.CodeUnits = MergeDuplicateCodeUnits(group.CodeUnits);
 
             result.Projects.Add(group);
+
+            // Finalize project compilation for cross-file resolution
+            semanticProvider.FinalizeProject(project.ProjectFilePath);
         }
 
         return result;

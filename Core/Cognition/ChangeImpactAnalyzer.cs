@@ -143,7 +143,8 @@ public sealed class ChangeImpactAnalyzer
             if (entry.NodeId == targetId) continue;
 
             var node = _graphQuery.GetNode(entry.NodeId);
-            var riskScore = ComputeRisk(entry.PropagatedConfidence);
+            var depType = GetDependencyType(targetId, entry.NodeId, node);
+            var riskScore = ComputeRisk(entry.PropagatedConfidence, depType);
 
             impacted.Add(new ImpactPath
             {
@@ -156,10 +157,36 @@ public sealed class ChangeImpactAnalyzer
                 RiskLevel = ClassifyRisk(riskScore),
                 SourceFile = node?.SourceFile ?? "",
                 EdgeKind = entry.ViaEdgeKind ?? "",
+                DependencyType = depType,
             });
         }
 
         return impacted;
+    }
+
+    private string GetDependencyType(string fromId, string toId, GraphNode? toNode)
+    {
+        // Check edge attributes for dependency type tag
+        var edges = _graphQuery.GetOutgoingEdges(fromId);
+        foreach (var e in edges)
+        {
+            if (e.ToId == toId)
+            {
+                var dt = e.GetAttr("dependencyType");
+                if (!string.IsNullOrEmpty(dt)) return dt;
+            }
+        }
+
+        // Fallback classification
+        if (toNode is not null)
+        {
+            var fromNode = _graphQuery.GetNode(fromId);
+            var sameClass = fromNode is not null
+                && string.Equals(fromNode.ClassName, toNode.ClassName, StringComparison.Ordinal);
+            if (sameClass) return DependencyEdgeTypes.PrivateImplementation;
+        }
+
+        return DependencyEdgeTypes.TransitiveCall;
     }
 
     private List<ImpactPath> AnalyzeUpstreamDependents(string targetId)
@@ -189,12 +216,23 @@ public sealed class ChangeImpactAnalyzer
         return dependents;
     }
 
-    private static double ComputeRisk(GroundingConfidence confidence)
+    private static double ComputeRisk(GroundingConfidence confidence, string depType)
     {
         var baseRisk = 1.0 - confidence.Score;
         var hopPenalty = Math.Min(confidence.HopDistance * 0.1, 0.4);
         var speculativePenalty = confidence.HasSpeculativeAncestor ? 0.2 : 0;
-        return Math.Clamp(baseRisk + hopPenalty + speculativePenalty, 0, 1.0);
+
+        // Private implementation → downgrade risk
+        var typeAdjustment = depType switch
+        {
+            DependencyEdgeTypes.PrivateImplementation => -0.2,
+            DependencyEdgeTypes.InterfaceContract => -0.1,
+            DependencyEdgeTypes.EntryPointReachable => 0.05,
+            DependencyEdgeTypes.TransitiveCall => 0.1,
+            _ => 0,
+        };
+
+        return Math.Clamp(baseRisk + hopPenalty + speculativePenalty + typeAdjustment, 0, 1.0);
     }
 
     private static RiskLevel ClassifyRisk(double score) => score switch
@@ -253,10 +291,21 @@ public sealed class ChangeImpactAnalyzer
                 citIds.Add($"cite-{citations.Last().CitationId}");
             }
 
+            var depLabel = impact.DependencyType switch
+            {
+                DependencyEdgeTypes.PrivateImplementation => "private",
+                DependencyEdgeTypes.InterfaceContract => "interface",
+                DependencyEdgeTypes.EntryPointReachable => "entry-point",
+                DependencyEdgeTypes.DirectCall => "direct",
+                _ => "transitive",
+            };
+
+            var text = $"[{impact.RiskLevel}] [{depLabel}] {impact.TargetNodeLabel}: hop={impact.HopDistance}, confidence={impact.Confidence:F2}, risk={impact.RiskScore:F2}";
+
             explanations.Add(new GroundedExplanation
             {
                 ExplanationId = $"impact-exp-{expId++:D5}",
-                Text = $"[{impact.RiskLevel}] {impact.TargetNodeLabel}: hop={impact.HopDistance}, confidence={impact.Confidence:F2}, risk={impact.RiskScore:F2}",
+                Text = text,
                 Claim = $"Impact on: {impact.TargetNodeLabel}",
                 ConfidenceLevel = impact.Confidence >= 0.8 ? ConfidenceLevel.Strong : ConfidenceLevel.Moderate,
                 SupportingNodeIds = new[] { impact.TargetNodeId },
@@ -281,8 +330,8 @@ public sealed class ChangeImpactAnalyzer
             explanations.Add(new GroundedExplanation
             {
                 ExplanationId = $"impact-exp-{expId++:D5}",
-                Text = "No upstream dependents detected.",
-                Claim = "Upstream dependents",
+                Text = "No upstream API entry points detected.",
+                Claim = "Upstream entry points",
                 ConfidenceLevel = ConfidenceLevel.Moderate,
                 SupportingNodeIds = Array.Empty<string>(),
                 SupportingSourceFiles = Array.Empty<string>(),
@@ -293,11 +342,18 @@ public sealed class ChangeImpactAnalyzer
 
         foreach (var dep in dependents.Take(10))
         {
+            var depLabel = dep.DependencyType switch
+            {
+                DependencyEdgeTypes.EntryPointReachable => "reachable from API entry point",
+                DependencyEdgeTypes.PrivateImplementation => "via private method chain",
+                _ => "upstream dependent",
+            };
+
             explanations.Add(new GroundedExplanation
             {
                 ExplanationId = $"impact-exp-{expId++:D5}",
-                Text = $"Entry point depends on target: {dep.TargetNodeLabel} (via {dep.EdgeKind})",
-                Claim = $"Dependent: {dep.SourceNodeId}",
+                Text = $"{depLabel}: {dep.TargetNodeLabel}",
+                Claim = $"Entry point: {dep.SourceNodeId}",
                 ConfidenceLevel = ConfidenceLevel.Strong,
                 SupportingNodeIds = new[] { dep.SourceNodeId, dep.TargetNodeId },
                 SupportingSourceFiles = new[] { dep.SourceFile }.Where(f => !string.IsNullOrEmpty(f)).ToList(),
@@ -425,6 +481,7 @@ public sealed class ImpactPath
     public RiskLevel RiskLevel { get; init; }
     public string SourceFile { get; init; } = "";
     public string EdgeKind { get; init; } = "";
+    public string DependencyType { get; init; } = DependencyEdgeTypes.TransitiveCall;
 }
 
 public enum RiskLevel

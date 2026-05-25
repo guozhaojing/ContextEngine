@@ -80,6 +80,18 @@ public sealed class QueryRouter
                 );
 
             default:
+                var query = interpreted.NormalizedQuery;
+                var matchingNode = FindMatchingNode(query);
+                if (matchingNode is not null)
+                {
+                    return (
+                        "ChangeImpactAnalyzer",
+                        q => _session.AnalyzeImpact(q, matchingNode),
+                        RoutingConfidence.Medium,
+                        $"Query matched graph node '{matchingNode}'. Routing to impact analysis."
+                    );
+                }
+
                 return (
                     "ArchitectureExplorer",
                     q => _session.ExploreArchitecture(q),
@@ -87,6 +99,22 @@ public sealed class QueryRouter
                     "Unclear intent. Defaulting to architecture exploration."
                 );
         }
+    }
+
+    private string? FindMatchingNode(string queryText)
+    {
+        if (_session.QueryService is null) return null;
+
+        foreach (var node in _session.QueryService.GetAllNodes())
+        {
+            if (node.Label.Contains(queryText, StringComparison.OrdinalIgnoreCase)
+                || (node.ClassName?.Contains(queryText, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (node.MethodName?.Contains(queryText, StringComparison.OrdinalIgnoreCase) ?? false))
+            {
+                return node.Id;
+            }
+        }
+        return null;
     }
 }
 

@@ -11,6 +11,14 @@ using Core.Grounding.Confidence;
 
 namespace Core.Runtime;
 
+public enum LanguageTone
+{
+    Neutral = 0,
+    Assertive = 1,
+    Tentative = 2,
+    Speculative = 3,
+}
+
 public sealed class SemanticStatement : IEquatable<SemanticStatement>
 {
     public required string StatementId { get; init; }

@@ -6,22 +6,29 @@
 // Replay: session history can be exported for regression.
 // Grounding: all cognition output is grounded and citation-backed.
 // =============================================================================
-
+// Cli/CognitionRepl.cs — interactive developer cognition REPL
+// =============================================================================
 using System.Diagnostics;
 using System.Text;
+using Core.Cognition.Patching;
 using Core.Experience;
 using Core.Graph;
 using Core.Graph.Analysis;
 using Core.Graph.Analysis.Analyzers;
 using Core.Graph.Analysis.GenericResolution;
+using Core.Observability;
 using Core.Scanning;
-using Core.Semantics;
+using Core.SelfValidation;
+using Core.Verification;
+using Core.Cognition.Epistemics;
+using Core.ReasoningUX;
 
 namespace App.Cli;
 
 public sealed class CognitionRepl
 {
     private readonly RepositoryCache _cache;
+    private readonly string _cacheDir;
     private RepositorySession? _session;
     private InteractiveCognitionSession? _interactive;
     private bool _running = true;
@@ -61,6 +68,7 @@ public sealed class CognitionRepl
 
     public CognitionRepl(string cacheDir)
     {
+        _cacheDir = cacheDir;
         _cache = new RepositoryCache(cacheDir);
     }
 
@@ -135,6 +143,79 @@ public sealed class CognitionRepl
             if (input.Equals("cache", StringComparison.OrdinalIgnoreCase))
             {
                 ShowCacheStatus();
+                return;
+            }
+
+            if (input.Equals("map", StringComparison.OrdinalIgnoreCase))
+            {
+                var mapGen = new SystemMapGenerator();
+                Console.WriteLine(mapGen.GeneratePipelineMap());
+                return;
+            }
+
+            if (input.Equals("health", StringComparison.OrdinalIgnoreCase))
+            {
+                var mapGen = new SystemMapGenerator();
+                var analyzer = new ComplexityAnalyzer(mapGen);
+                var result = analyzer.Analyze();
+                Console.WriteLine(result.IsHealthy ? "架构健康" : $"需关注 — {result.Findings.Count} 个发现");
+                foreach (var f in result.Findings)
+                    Console.WriteLine($"  [{f.Severity}] {f.Category}: {f.Description}");
+                return;
+            }
+
+            if (input.StartsWith("verify ", StringComparison.OrdinalIgnoreCase))
+            {
+                EnsureSessionLoaded();
+                var q = input[7..].Trim().Trim('"');
+                var result = _session!.Query(q);
+                if (result is not null)
+                {
+                    var verifier = new VerificationOrchestrator();
+                    var epistemic = new EpistemicBoundary(_session.QueryService!).Analyze(result, q);
+                    var report = verifier.Verify(result, epistemic);
+                    Console.WriteLine();
+                    Console.WriteLine($"可信度裁定: {report.Verdict}");
+                    Console.WriteLine(report.Summary);
+                }
+                return;
+            }
+
+            if (input.StartsWith("self-critique ", StringComparison.OrdinalIgnoreCase))
+            {
+                EnsureSessionLoaded();
+                var q = input[14..].Trim().Trim('"');
+                var result = _session!.Query(q);
+                if (result is not null)
+                {
+                    var epistemic = new EpistemicBoundary(_session.QueryService!).Analyze(result, q);
+                    var evaluator = new ResponseSelfEvaluator();
+                    var evaluation = evaluator.Evaluate(result, epistemic);
+                    var riskAnalyzer = new EpistemicRiskAnalyzer();
+                    var riskReport = riskAnalyzer.Analyze(result, epistemic);
+                    var gapDetector = new InvestigationGapDetector();
+                    var gapReport = gapDetector.Detect(result, epistemic);
+                    var critiqueGen = new SelfCritiqueGenerator();
+                    var critique = critiqueGen.Generate(evaluation, riskReport, gapReport, result);
+                    Console.WriteLine();
+                    Console.WriteLine(critique.GenerateCritiqueText());
+                }
+                return;
+            }
+
+            if (input.StartsWith("patch ", StringComparison.OrdinalIgnoreCase))
+            {
+                EnsureSessionLoaded();
+                var request = input[6..].Trim().Trim('"');
+                var conventionAnalyzer = new ConventionAnalyzer(_session!.QueryService!);
+                var planner = new PatchPlanner(_session.QueryService!, conventionAnalyzer,
+                    _session.ArchitectureExplorer!, _session.ImpactAnalyzer!);
+                var generator = new GroundedPatchGenerator();
+                var validator = new PatchImpactValidator(_session.QueryService!, _session.ConfidenceEngine!);
+                var etp = new ExplainThenPatch(planner, generator, validator);
+                var patchResult = etp.ExplainAndPatch(request, _session.RepositoryName);
+                Console.WriteLine();
+                Console.WriteLine(patchResult.Explanation);
                 return;
             }
 
@@ -257,6 +338,7 @@ public sealed class CognitionRepl
             {
                 new AspNetRouteAnalyzer(),
                 new SpringBeanAnalyzer(),
+                new SpringContextObjectAnalyzer(),
                 new NHibernateAnalyzer(),
                 new NhSessionGenericAnalyzer(),
             });

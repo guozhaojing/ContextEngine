@@ -40,11 +40,25 @@ public class GraphEdge
 
     /// <summary>两端节点是否都有关联的源文件/符号。</summary>
     public bool Grounded { get; set; } = true;
+
+    // ── v3: Dependency edge type classification ──
+
+    /// <summary>依赖边分类：DirectCall / TransitiveCall / EntryPointReachable / PrivateImplementation / InterfaceContract。</summary>
+    public string DependencyType { get; set; } = DependencyEdgeTypes.DirectCall;
 }
 
 public static class GraphEdgeKinds
 {
     public const string Call = "call";
+}
+
+public static class DependencyEdgeTypes
+{
+    public const string DirectCall = "direct-call";
+    public const string TransitiveCall = "transitive-call";
+    public const string EntryPointReachable = "entry-point-reachable";
+    public const string PrivateImplementation = "private-implementation";
+    public const string InterfaceContract = "interface-contract";
 }
 
 public static class EdgeLayer

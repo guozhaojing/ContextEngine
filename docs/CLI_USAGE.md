@@ -1,109 +1,111 @@
-# CLI Usage Guide
+# CLI 使用指南
 
-## Starting the REPL
+## 启动
 
 ```bash
-dotnet run                          # Interactive REPL
-dotnet run -- --load <path>         # Load repo and enter REPL directly
-dotnet run -- --scan <path>         # Legacy full pipeline scan mode
+dotnet run                          # 交互 REPL
+dotnet run -- --web                 # Web API 模式 (http://localhost:5290)
+dotnet run -- --scan <path>         # 传统全流水线扫描模式
+dotnet run -- --load <path>         # 加载仓库并进入 REPL
 ```
 
-## Commands
+## 全部命令
 
-| Command | Description |
+### 仓库操作
+
+| 命令 | 说明 |
 |---|---|
-| `load <path>` | Load a .NET solution or project |
-| `reload` | Reload current repository (skip cache) |
-| `ask <question>` | Ask a natural engineering question (auto-routed) |
-| `followup <question>` | Follow up on previous question with context |
-| `arch <question>` | Force architecture exploration |
-| `impact <question>` | Force change impact analysis |
-| `capability <question>` | Force business capability mapping |
-| `debug <question>` | Force root cause analysis |
-| `summary` | Show investigation summary |
-| `history` | Show query history |
-| `export <file.md>` | Export investigation report |
-| `cache` | Show cache status |
-| `clear` | Reset conversation context |
-| `stats` | Show repository statistics |
-| `help` | Show help |
-| `exit` / `quit` | Exit |
+| `load <路径>` | 加载 .NET 解决方案或项目（首次全量扫描，后续缓秒加载) |
+| `reload` | 强制重新扫描（跳过缓存） |
+| `cache` | 显示缓存状态 |
+| `clear` | 清除会话上下文 |
+| `stats` | 显示仓库统计 |
+| `health` | 检查架构健康度 |
+| `map` | 显示认知流水线 |
 
-## Query Routing
+### 查询
 
-Questions are automatically routed to the right engine:
-
-| Pattern | Routed to |
+| 命令 | 说明 |
 |---|---|
-| "explain architecture", "how is structured" | ArchitectureExplorer |
-| "what breaks", "who depends", "impact of" | ChangeImpactAnalyzer |
-| "where is", "how does", "how is handled" | BusinessCapabilityMapper |
-| "why does", "why is", "debug", "fail", "error" | GroundedRootCauseExplorer |
+| `ask <问题>` | 自然语言查询（自动路由到最佳引擎） |
+| `followup <问题>` | 追问上一个问题（保持上下文） |
+| `arch <问题>` | 强制架构探索 |
+| `impact <问题>` | 强制变更影响分析 |
+| `capability <问题>` | 强制业务能力映射 |
+| `debug <问题>` | 强制根因分析 |
 
-## Confidence Levels
+### 验证与改进
 
-Responses include a confidence indicator:
+| 命令 | 说明 |
+|---|---|
+| `verify <问题>` | 执行可信度验证（5维度检验） |
+| `self-critique <问题>` | 生成系统自我批评 |
+| `patch <描述>` | 生成遵循仓库约定的代码建议 |
+
+### 会话管理
+
+| 命令 | 说明 |
+|---|---|
+| `summary` | 显示调查摘要 |
+| `history` | 显示查询历史 |
+| `export <文件.md>` | 导出调查报告 |
+| `help` | 显示帮助 |
+| `exit` / `quit` | 退出 |
+
+## 查询路由
+
+问题自动路由到正确的引擎：
+
+| 模式（中文） | 模式（英文） | 路由到 |
+|---|---|---|
+| "解释架构" "系统结构" "分层" "模块" | "architecture" "structure" "subsystem" | ArchitectureExplorer |
+| "改动影响" "谁依赖" "会不会影响" | "what breaks" "who depends" "impact" | ChangeImpactAnalyzer |
+| "在哪里实现" "谁处理" "哪个服务" | "where is" "how does" "implemented" | BusinessCapabilityMapper |
+| "为什么失败" "错误" "超时" "重试" | "why does" "debug" "fail" "error" | GroundedRootCauseExplorer |
+
+无法匹配时，系统在图里搜索匹配的类名/方法名，找到则路由到影响分析。
+
+## 置信度级别
 
 ```
-Certain    [██████████]  Semantic evidence + symbol binding
-Strong     [████████░░]  Graph evidence + source files
-Moderate   [██████░░░░]  Partial evidence
-Weak       [████░░░░░░]  Limited evidence
-Speculative[██░░░░░░░░]  Inferred, not directly grounded
-Unsupported[░░░░░░░░░░]  No evidence
+确定     [██████████] 100%  语义证据 + 符号绑定
+高       [████████░░]  85%  图证据 + 源文件
+中       [██████░░░░]  60%  部分证据
+低       [████░░░░░░]  40%  有限证据
+推测     [██░░░░░░░░]  20%  推断，非直接接地
+无证据   [░░░░░░░░░░]   0%  无支撑
 ```
 
-## Response Format
+## 可信度裁定
 
-Each response includes:
-1. **Title** — derived from query type
-2. **Confidence bar** — visual confidence indicator
-3. **Evidence summary** — citation count
-4. **Explanations** — numbered, confidence-tagged findings
-5. **Sources** — layered citation blocks with source files
-6. **Contradiction warnings** — surfaced when applicable
+```
+StronglyGrounded          高度可信 — 证据充分，分析完整
+PartiallyVerified         部分验证 — 存在不确定性
+RuntimeIncomplete         运行时分析不完整
+CompetingHypothesesPresent 存在竞争假设
+LimitedEvidence           证据有限
+RequiresFurtherInvestigation 需要更多调查
+```
 
-## Example Workflow
+## 示例工作流
 
 ```
 cognition> load D:\Projects\MyApp
-Loading: D:\Projects\MyApp
-  Loaded from cache.
-Repository loaded. (0.3s)
-  Projects:  5
-  Nodes:     2431
-  Edges:     8912
-  Facts:     3847
-
-cognition> ask "Explain the payment architecture"
-[response with architecture layers, integration points, entity counts]
-
-cognition> followup "What are the integration points?"
-[response with cross-project dependencies]
-
-cognition> impact "What breaks if I change PaymentService?"
-[response with downstream impact, risk scores, upstream dependents]
-
+cognition> ask "解释系统架构"
+cognition> impact "改动 PaymentService 有什么影响"
+cognition> verify "改动 PaymentService 有什么影响"
+cognition> self-critique "为什么重试失败"
+cognition> patch "在 PaymentService 加异常日志"
+cognition> map
+cognition> health
 cognition> summary
-Interactive Session: interactive-143021
-Total Questions: 3
-  Architecture: 2
-  Impact Analysis: 1
-
-cognition> export payment-investigation.md
-Report exported to: D:\Projects\MyApp\payment-investigation.md
+cognition> export 调查.md
 ```
 
-## Cache
+## 缓存
 
-First load performs full analysis. Subsequent loads restore from cache in `%LOCALAPPDATA%\ContextEngine\cache\`.
-
-Use `reload` to force re-scan and clear cache.
-
-## Tips
-
-- Be specific — "Explain the payment retry architecture" beats "Explain"
-- Use follow-ups — the session remembers context between questions
-- Export long sessions — `export report.md` saves the full investigation
-- Check confidence — moderate/low confidence may need source verification
-- Prefer `impact` for refactoring questions, `debug` for failure questions
+- 首次加载全量扫描（30-60秒），自动保存缓存到 `%LOCALAPPDATA%\ContextEngine\cache\`
+- 后续加载同一路径从缓存恢复（<1秒）
+- `reload` 强制重新扫描
+- `cache` 查看缓存状态
+- WebUI 左侧栏有 "🗑 清除缓存" 按钮

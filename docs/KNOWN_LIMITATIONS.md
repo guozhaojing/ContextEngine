@@ -1,126 +1,48 @@
 # Known Limitations
 
-## Static Analysis Bounds
+## Static Analysis
 
-All analyzers use **syntax-tree-level static analysis only**. They cannot resolve:
+- 反射调用不可见（`MethodInfo.Invoke`, `Activator.CreateInstance`）
+- 运行时 DI 绑定不可见（`services.AddScoped<IFoo, Foo>()` 未解析 — Phase 7C 计划）
+- AOP/动态代理不可见
+- 异步/多线程调度关系不可见
+- 事件/委托绑定不可见
 
-### Runtime DI Containers
-```csharp
-// NOT resolvable
-services.AddScoped<IRepository<Order>, OrderRepository>();
-builder.RegisterGeneric(typeof(Repository<>)).As(typeof(IRepository<>));
-```
+## Method Resolution
 
-Only Spring.NET `<object>` XML registrations are detected (via SpringBeanAnalyzer).
+- 同文件 private 方法调用已通过字符串回退连接，置信度 medium
+- 跨项目引用依赖 Roslyn 元数据解析，高泛型场景可能漏连
+- 虚方法/接口方法的运行时实现选择不可见
 
-### Reflection-Based Access
-```csharp
-// NOT resolvable
-var entityType = typeof(T);
-var method = typeof(Session).GetMethod("Query").MakeGenericMethod(entityType);
-Activator.CreateInstance(entityType);
-```
+## ORM Coverage
 
-### Dynamic HQL Assembly
-```csharp
-// NOT resolvable (via generics)
-var hql = $"from {typeof(T).Name} o where o.Status = :status";
-session.CreateQuery(hql).SetParameter("status", status).List();
-```
+- NHibernate: 已支持 `session.Query<T>()`、HQL、HBM XML
+- NHibernate: FluentNHibernate 代码映射未解析
+- Entity Framework Core: 未解析 DbContext
+- Dapper: 未解析原始 SQL
 
-The NHibernateAnalyzer can trace HQL from string literals and nearby variable assignments within the same method, but cannot trace across generic layers where `typeof(T).Name` is used.
+## DI Framework
 
-## Interface Ambiguity
+- Spring.NET XML: ✅ 已支持
+- Spring.NET context.GetObject: ✅ 已支持（SpringContextObjectAnalyzer）
+- Microsoft.Extensions.DI: ❌ 未解析
+- Autofac: ❌ 未解析
 
-When multiple classes implement `IRepository<T>`:
-```csharp
-class OrderRepo : IRepository<Order> { }
-class CustomerRepo : IRepository<Customer> { }
-```
+## Token Usage
 
-The GenericInvocationResolver cannot determine which implementation a field typed as `IRepository<T>` refers to without runtime context.
+- 代码图构建会追加语法回退边（max 5000）和同 class 连接边（max 3000）
+- 大项目（2500+ 方法）扫描时间 30-60 秒
+- 缓存恢复 < 2 秒
 
-## Partial Route-to-Table Coverage
+## Performance
 
-**Root cause**: Entity access detection relies on NHibernate Session API calls. Methods that access data through:
-- Stored procedure calls
-- Raw ADO.NET
-- Dapper
-- Entity Framework
-- File I/O
+- 首次扫描 25 项目 2500 方法约 30-60 秒
+- SemanticModelProvider 现在使用延迟编译，扫描时每文件单文件编译（快）
+- 语法回退边用纯字符串匹配，不用 Roslyn AST 解析
+- 缓存恢复 < 2 秒
 
-...will not produce `nh:entity-access` edges, breaking Route→Table chains.
+## Web UI
 
-## HBM XML Dependency
-
-Entity↔Table mapping primarily comes from `.hbm.xml` files. If a project uses:
-- Fluent NHibernate (code-based mappings)
-- NHibernate Mapping-by-Code
-- Attributes-based mapping
-
-...table names fall back to simple `ClassName + "s"` pluralization, which may be incorrect.
-
-## Method Identifier Sensitivity
-
-`MethodId` is built from:
-- **Project path** (normalized, lowercase)
-- **Namespace.Class.Method(paramTypes)**
-
-Changes that break MethodId stability:
-- Renaming a .csproj file or moving it
-- Changing a method's parameter types
-- Renaming namespaces, classes, or methods
-
-## Open Generic Types
-
-`IRepository<>` (without type parameter) cannot be resolved:
-```csharp
-// T is unknown until runtime
-public class GenericService<T> where T : class {
-    private readonly IRepository<T> _repo;  // T not bound
-}
-```
-
-## Nested Generic Propagation
-
-Type parameter propagation limited to recursion depth 10:
-```csharp
-// Layer 1-2 resolved; deeper layers may fail
-class A<T> : B<T> {}
-class B<T> : C<T> {}
-class C<T> : D<T> {} // etc.
-```
-
-## Performance Characteristics
-
-| Operation | Characteristics |
-|-----------|----------------|
-| Scanning | O(files × methods). 29 projects, 2,547 CodeUnits → ~10-30s |
-| Graph building | O(edges). 14,230 edges → <1s |
-| NHibernateAnalyzer | O(files × invocations). Full syntax tree parse per file |
-| NhSessionGenericAnalyzer | O(files × class_declarations × invocations). Roslyn SyntaxTree traversal per file |
-| GenericInheritanceMap | O(files). Roslyn CSharpSyntaxTree.ParseText per file, 已替代 regex |
-| SemanticTraversal | O(branches^depth). Bounded by MaxPaths (200) |
-| Query Understanding | O(vocabulary_size × query_tokens). Lightweight |
-
-## No Incremental Support
-
-Current analysis is always full-scan. `GraphAnalysisScope` supports per-file incremental scoping but:
-- No file system watcher integration
-- No partial graph rebuild
-- No scan.json caching
-
-## No Parallelism
-
-All analyzers run sequentially via `GraphAnalysisPipeline`. No parallel file processing, no multi-threaded syntax tree parsing.
-
-## Target Framework
-
-- **net8.0 only**. No netstandard2.0 or net48 compatibility.
-- **Windows path handling**: Uses `Path.GetRelativePath()`, `Path.DirectorySeparatorChar`. Cross-platform with forward-slash normalization.
-
-## Query Understanding Limitations
-
-- **Chinese segmentation**: Simple 2-gram approach. No dictionary-based Chinese word segmentation (e.g., jieba).
-- **Synonym coverage**: Fixed 18 Chinese↔English business concept pairs. No domain-adaptive expansion.
-- **No embedding-based semantic matching**: Pure lexical + alias graph expansion. Cannot handle paraphrasing.
+- 代码修复功能需要配置有效 LLM API Key
+- Ollama 本地模型需要预先安装并运行
+- 前端仅开发模式（Vite dev server），生产构建未配置

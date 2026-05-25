@@ -8,7 +8,6 @@
 // =============================================================================
 
 using Core.Cognition;
-using Core.Evaluation.Cognition;
 
 namespace Core.Experience;
 
@@ -160,6 +159,9 @@ public class QueryInterpreterOptions
         "architecture", "structure", "subsystem", "layer", "dependency",
         "how is organized", "how is structured", "explain the system",
         "describe the architecture",
+        "架构", "结构", "子系统", "层次", "依赖", "分层",
+        "怎么组织", "如何组织", "解释系统", "解释架构", "描述架构",
+        "系统概述", "项目结构", "哪些模块", "模块划分",
     };
 
     public IReadOnlyList<string> ImpactPatterns { get; init; } = new[]
@@ -167,6 +169,9 @@ public class QueryInterpreterOptions
         "what breaks", "impact of", "who depends", "who calls",
         "what depends on", "what would break", "affected by",
         "consequences of changing", "what is affected",
+        "影响", "改动", "修改", "变更", "破坏", "崩溃",
+        "谁会受影响", "谁依赖", "谁调用了", "会被影响",
+        "改动会", "修改会", "改了会", "会不会影响",
     };
 
     public IReadOnlyList<string> DebugPatterns { get; init; } = new[]
@@ -174,6 +179,9 @@ public class QueryInterpreterOptions
         "why does", "why is", "why are", "why isn't", "why doesn't",
         "debug", "fail", "failing", "broken", "error", "exception",
         "timeout", "retry", "crash",
+        "为什么", "为何", "怎么失败", "怎么出错", "怎么崩溃",
+        "调试", "失败", "错误", "异常", "超时", "重试",
+        "报错", "不工作", "坏了", "bug", "缺陷",
     };
 
     public IReadOnlyList<string> CapabilityPatterns { get; init; } = new[]
@@ -181,6 +189,9 @@ public class QueryInterpreterOptions
         "where is", "how does", "implemented", "implementation",
         "how do i", "how to", "how are", "how is handled",
         "what handles", "who handles", "where does",
+        "在哪里", "怎么实现", "如何实现", "谁处理", "谁负责",
+        "实现方式", "怎么处理", "如何处理", "在哪处理",
+        "哪个类", "哪个服务", "哪段代码", "在哪里处理",
     };
 
     public static QueryInterpreterOptions Default => new();

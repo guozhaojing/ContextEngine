@@ -2,83 +2,77 @@
 
 ## Completed
 
-- [x] Phase 1: Roslyn scanning (solution/project discovery, SyntaxTree, SemanticModel, CodeUnit extraction)
-- [x] Phase 2: Graph building (call edges, MethodId, adjacency, GraphIndex)
-- [x] Phase 3: Analysis pipeline (IGraphAnalyzer, merge service, incremental scope)
-- [x] Phase 4: Analyzers — AspNetRoute, SpringBean, NHibernate (3 analyzers)
-- [x] Phase 5A: Semantic traversal (BFS engine, EdgeKind/Confidence filters, SemanticPath)
-- [x] Phase 5B: Query understanding (vocabulary, intent, expansion, rewriting, explanation)
-- [x] Phase 5C: Generic resolution (inheritance map, repository patterns, generic invocation, entity resolution)
+- [x] Roslyn scanning + graph building + analysis pipeline
+- [x] Semantic traversal + query understanding + generic resolution
+- [x] Grounding enforcement: claim validation, hallucination blocking, citation constraint
+- [x] Confidence propagation: 8 decay rules, deterministic BFS
+- [x] Contradiction detection: 8 types, consistency validation
+- [x] Self-validation: 5-dim scoring, 6 risk types, self-critique
+- [x] Verification: 5-dim trustworthiness, 6 verdict levels
+- [x] Cognition engines: ArchitectureExplorer, ChangeImpactAnalyzer, BusinessCapabilityMapper, GroundedRootCauseExplorer
+- [x] Epistemic boundary: 6 evidence states, triple confidence
+- [x] Progressive reasoning presentation: 5-layer progressive disclosure
+- [x] Observability: system maps, architecture narration, complexity analysis
+- [x] CLI REPL: 14 commands, query routing, repository cache
+- [x] Web API + WebUI: REST endpoints, React chat workspace
+- [x] Explain→Plan→Patch pipeline
+- [x] Code fix pipeline: locate→context→patch→build→retry (max 3)
+- [x] Repository history persistence
+- [x] API provider selection (8 providers)
+- [x] Spring context.GetObject resolver
+- [x] Same-class private method connector (string-based, fast)
+- [x] Edge dependency type classification (5 types)
+- [x] Per-project semantic compilation (with fallback to per-file)
 
-## Next Priorities
+- [x] Semantic doc builder (SyntaxWalker + regex hybrid)
+- [x] Embedding index (InMemoryVectorStore)
+- [x] Reverse index (table/http/exception/config → method)
+- [x] Code summarizer (structured behavior summary, no raw code)
+- [x] Hybrid retrieval with per-profile weights (Code/Bug/Architecture/Database)
+- [x] Semantic benchmark (40 ZhiFang queries, Recall/MRR/Precision/NoiseRatio)
+- [x] Failure pattern analysis (7 patterns)
+- [x] QueryType→Profile auto-mapping (8 types)
+- [x] NoiseTermFilter (CRUD/DTO/utility penalty)
+- [x] Graph expansion constraints (base skip, same-class bonus)
+- [x] RetrievalTrace (per-result traceability)
+- [x] RankingRuleSet (centralized rules, no scattered if/else)
+- [x] NoiseContributionReport (pollution source identification)
 
-### Short-term
+## Retrieval Quality Targets
 
-1. **Real project validation**
-   - Run against enterprise NHibernate C# codebase with real EQA_* entities
-   - Verify GenericResolution produces significant table/entity discovery increase
-   - Measure Route→Table path count improvement
-   - Fix any statistical gaps between expected vs actual entity coverage
+| Metric | Current | Target |
+|---|---|---|
+| Hybrid Recall@5 | ~65% | >75% |
+| Precision@5 | ~52% | >70% |
+| NoiseRatio | ~48% | <30% |
 
-2. **Chunked embedding pipeline (Phase 5D)**
-   - Implement method-level chunking from CodeUnit.Content
-   - Integrate local embedding model
-   - Build vector store (in-memory or lightweight DB)
-   - Implement hybrid retrieval (dense + sparse + graph-aware)
+## Next — Phase 7B: L2 Code Modification
 
-3. **NHibernate mapping extensibility**
-   - Support Fluent NHibernate (code-based mapping detection)
-   - Support NHibernate Mapping-by-Code conventions
-   - Support `[Table("name")]` attributes
+- Allow: same-class multi-method modification, new private fields/methods
+- Forbid: public API, interface, constructor signature changes
+- Context upgrade: class fields + all method signatures + target body + related private methods
 
-### Medium-term
+## Next — Phase 7C: DI Call Chain Completion
 
-4. **Additional analyzers**
-   - EF Core: `DbContext.Set<T>()`, LINQ query detection
-   - Dapper: `connection.Query<T>()`, raw SQL extraction
-   - MediatR: `IRequestHandler<TRequest, TResponse>`, pipeline behaviors
+- Parse Microsoft.Extensions.DI: AddScoped/AddTransient/AddSingleton
+- Parse Autofac: RegisterType().As<>()
+- Generate spring:di-bind edges
 
-5. **Query Understanding enhancements**
-   - Chinese dictionary-based word segmentation
-   - Domain-adaptive synonym expansion from project vocabulary
-   - Embedding-based semantic matching for query expansion
+## Next — Phase 7D: Domain Knowledge Layer
 
-6. **Viewer implementation (Phase 6)**
-   - React Flow canvas with Dagre layout
-   - Layer-based graph visualization
-   - SemanticPath highlight + animation
-   - Interactive filtering (Kind, Confidence, Depth)
+- Auto-extract domain terms from entity names, table names, method names
+- Generate business chain summaries per Controller method
+- Inject as "project background knowledge" into LLM context
 
-### Long-term
+## Next — Phase 7E: Context Compression
 
-7. **Incremental scanning**
-   - File system watcher for `.cs` changes
-   - Partial graph rebuild (only affected files + downstream)
-   - Scan result caching (avoid re-parsing unchanged files)
-
-8. **Performance optimization**
-   - Parallel analyzer execution
-   - Multi-threaded syntax tree parsing
-   - GraphIndex compression for large codebases
-
-9. **IDE integration**
-   - Language Server Protocol (LSP) implementation
-   - VS Code extension with inline impact analysis
-   - Rider/Visual Studio plugin
-
-## Deferred Ideas
-
-- **Runtime tracer**: Hybrid static + runtime agent that instruments NHibernate at runtime to capture actual SQL → entity mappings, feeding back into the static model
-- **Cross-repository linking**: Connect multiple scanned repositories (microservice topology)
-- **Change impact prediction**: Given a diff, predict which routes/APIs are affected before running
-- **Query language**: DSL for expressing semantic queries over the graph (e.g., `route -> entity -> table where table = 'Orders'`)
-- **Auto-generated integration tests**: From Route→Table paths, generate API integration test stubs
+- CodeSummarizer: per-method semantic summary (no source code)
+- Token budget per scenario: query 500 / L1 fix 1500 / L2 fix 3000
+- Summary cache: {methodId}-summary.json
 
 ## Non-Goals
 
-- **LLM integration**: The system is intentionally deterministic and rule-based. No AI/LLM components will be added to the core analysis pipeline.
-- **Runtime profiling**: No CLR profiler, no performance tracing, no production monitoring.
-- **Database reverse-engineering**: Table schema is inferred from .hbm.xml or naming conventions only. No direct database connection.
-- **Security/vulnerability scanning**: Not a SAST tool. Call graph analysis is semantic, not security-oriented.
-- **Code generation**: No scaffolding, no boilerplate generation from analysis results.
-- **Multi-language support**: C# only. No Java, Python, TypeScript, or other language analysis.
+- Cross-repository analysis (deferred)
+- Multi-language support (deferred)
+- Autonomous agent behavior (deferred)
+- General-purpose AI IDE (out of scope)

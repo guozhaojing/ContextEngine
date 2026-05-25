@@ -1,110 +1,126 @@
-# Architecture Overview
+# 架构概览
 
-## System Layers
+## 系统层级
 
 ```
-App/Cli/          ← Developer REPL
+App/Cli/          ← 开发者 REPL (14个命令)
+App/WebApi/       ← REST API + 缓存会话管理
   ↓
-Core/Experience/  ← Session management, query routing, formatting
+Core/Experience/  ← 会话管理、查询路由、格式化
+Core/RelaxationUX/ ← 渐进式推理呈现 (5层披露)
   ↓
-Core/Cognition/   ← Architecture, Impact, Capability, Root Cause engines
+Core/Cognition/   ← 架构、影响、能力、根因 四大引擎
+Core/Cognition/Epistemics/ ← 认知边界、三维置信度
+Core/Cognition/Patching/   ← 解释→计划→补丁
   ↓
-Core/Grounding/   ← Claim validation, confidence propagation, contradictions
+Core/SelfValidation/ ← 响应自评、风险分析、自我批评
+Core/Verification/   ← 5维可信度验证、6级裁定
   ↓
-Core/Runtime/     ← Semantic state, governance, replay, provenance
+Core/Grounding/     ← 声明验证、幻觉阻止、引用约束
+Core/Grounding/Confidence/      ← 确定性置信度传播
+Core/Grounding/Contradictions/  ← 矛盾检测、一致性验证
   ↓
-Core/Graph/        ← Code graph, indexing, traversal, query
+Core/Runtime/       ← 语义状态、回放指纹、溯源快照
+Core/Runtime/Governance/ ← 不变式注册、状态转换验证
   ↓
-Core/Scanning/     ← Roslyn-based project scanning
+Core/Graph/         ← 代码图、索引、遍历、查询
+Core/Graph/Analysis/← NHibernate, Spring, AspNet 分析器
+  ↓
+Core/Semantics/     ← Roslyn 符号绑定、SymbolHandle
+Core/Truth/         ← 统一真值评分、证据强度
+  ↓
+Core/Scanning/      ← Roslyn 项目扫描、CodeUnit 提取
+Core/Observability/ ← 系统地图、架构叙述、复杂度分析
 ```
 
-## Key Namespaces
+## 关键命名空间
 
-| Namespace | Purpose |
+| 命名空间 | 用途 |
 |---|---|
-| `Core.Scanning` | Discover .NET projects, scan C# source to `CodeUnit` |
-| `Core.Graph` | Build call graphs, index adjacency, semantic traversal |
-| `Core.Graph.Analysis` | NHibernate, Spring.NET, ASP.NET route analyzers |
-| `Core.Graph.Identity` | Stable `MethodId` for deterministic node identity |
-| `Core.Semantics` | Roslyn symbol binding via `SymbolHandle` |
-| `Core.Truth` | `TruthScore` — unified confidence/evidence model |
-| `Core.Retrieval` | Hybrid retrieval, deterministic ranking, chunking |
-| `Core.Context` | Context assembly, grounding validation, evidence |
-| `Core.Grounding` | Claim validation, hallucination blocking, citations |
-| `Core.Grounding.Confidence` | Confidence propagation, edge decay rules |
-| `Core.Grounding.Contradictions` | Contradiction detection, consistency validation |
-| `Core.Runtime` | Semantic state, replay fingerprint, provenance snapshot |
-| `Core.Runtime.Governance` | Invariant registry, transition validation, drift detection |
-| `Core.Explainability` | Ranking explanation, audit trails, evidence reporting |
-| `Core.Evaluation` | E2E benchmarks, prompt quality, system consistency |
-| `Core.Evaluation.Cognition` | Cognition benchmarks, workflow simulation, regression |
-| `Core.Cognition` | Architecture/Impact/Capability/RootCause explorers |
-| `Core.Experience` | Repository session, query routing, interactive session |
-| `App.Cli` | REPL, cache, CLI tooling |
+| `Core.Scanning` | 发现 .NET 项目，扫描 C# 源码 |
+| `Core.Graph` | 构建调用图，索引邻接，语义遍历 |
+| `Core.Graph.Analysis` | NHibernate, Spring.NET, ASP.NET 路由分析器 |
+| `Core.Semantics` | Roslyn 符号绑定 (SymbolHandle), 引用索引 |
+| `Core.Truth` | TruthScore — 统一置信度/证据模型 |
+| `Core.Grounding` | 声明验证、幻觉阻止、引用生成 |
+| `Core.Grounding.Confidence` | 置信度传播、边缘衰减规则 |
+| `Core.Grounding.Contradictions` | 矛盾检测、一致性验证、矛盾感知生成 |
+| `Core.Runtime` | 语义状态、回放指纹、溯源快照 |
+| `Core.Runtime.Governance` | 不变式注册、状态转换验证、漂移检测 |
+| `Core.Cognition` | 架构/影响/能力/根因探索器 |
+| `Core.Cognition.Epistemics` | 认知边界、三维置信度、证据状态分类 |
+| `Core.Cognition.Patching` | 约定分析、补丁规划、接地代码生成 |
+| `Core.SelfValidation` | 5维响应自评、6种风险检测、自我批评 |
+| `Core.Verification` | 5维可信度验证、6级裁定 |
+| `Core.ReasoningUX` | 渐进式推理呈现、工程摘要合成 |
+| `Core.Experience` | 仓库会话、查询路由、交互式会话 |
+| `Core.Observability` | 系统地图生成、架构叙述、复杂度分析 |
+| `App.Cli` | REPL, 缓存, CLI 工具 |
+| `App.WebApi` | REST API 端点, WebUI 后端 |
 
-## Data Flow
+## 认知流水线
 
 ```
-.sln / .csproj
-  ↓ ProjectCodeScanner
-CodeUnit[] (methods, calls, symbols)
-  ↓ CodeGraphBuilder + Analyzers
-CodeGraph (nodes, edges, facts)
-  ↓ GraphIndex.Build()
-GraphIndex (adjacency, edges by kind)
-  ↓ SymbolGraphBuilder
-SymbolReferenceIndex (DocumentationCommentId → node)
-  ↓
-GraphQueryService (read-only query surface)
-  ↓
-Cognition Engines (architecture, impact, capability, root cause)
-  ↓
-CognitionResult (explanations + evidence citations)
+Query → DeveloperQueryInterpreter → QueryRouter
+  → ArchitectureExplorer / ChangeImpactAnalyzer / BusinessCapabilityMapper / GroundedRootCauseExplorer
+  → CognitionResult
+  → EpistemicBoundary → EpistemicReport
+  → ResponseSelfEvaluator → SelfEvaluation
+  → EpistemicRiskAnalyzer → EpistemicRiskReport
+  → InvestigationGapDetector → InvestigationGapReport
+  → SelfCritiqueGenerator → SelfCritique
+  → VerificationOrchestrator → VerificationReport
+  → ReasoningPresentationEngine → ProgressiveResponse (5层渐进披露)
+  → 用户可见响应
 ```
 
-## Determinism Architecture
+## 确定性架构
 
-All runtime-critical paths are deterministic:
-
-| Layer | Determinism Mechanism |
+| 层 | 确定性机制 |
 |---|---|
-| Identity | `MethodId` — stable content-derived ID, not UUID |
-| Symbol | `SymbolHandle` — Roslyn `DocumentationCommentId` |
-| Iteration | `OrderBy(x, StringComparer.Ordinal)` on all collections |
-| Ranking | `DeterministicRanker` — multi-key sort with terminal tie-breaker |
-| Propagation | Fixed decay rules, BFS with sorted expansion |
-| State | Immutable `readonly record struct` / sealed `init`-only classes |
-| Replay | `IEquatable<T>` on all state types, `ReplayFingerprint` |
-| Governance | Machine-verifiable invariants, static validation rules |
+| 标识 | MethodId — 内容派生的稳定 ID |
+| 符号 | SymbolHandle — Roslyn DocumentationCommentId |
+| 迭代 | 所有集合上 OrderBy(StringComparer.Ordinal) |
+| 排序 | DeterministicRanker — 多键排序 + 终端平局键 |
+| 传播 | 固定衰减规则, BFS + 排序扩展 |
+| 状态 | 不可变 readonly struct / sealed init-only 类 |
+| 回放 | 所有状态类型实现 IEquatable<T>, ReplayFingerprint |
+| 治理 | 机器可验证不变式, 静态验证规则 |
 
-## Confidence Model
+## 置信度模型
 
 ```
 TruthSource (Roslyn > NHibernate > Spring > Analyzer > Heuristic)
-  ×
-EvidenceStrength (SemanticDirect > SemanticInferred > SyntaxDirect > SyntaxPattern)
-  =
-TruthScore (0.0–1.0)
-  →
-GroundingConfidence (Certain/Strong/Moderate/Weak/Speculative/Unsupported)
+  × EvidenceStrength (SemanticDirect > SemanticInferred > SyntaxDirect > SyntaxPattern)
+  = TruthScore (0.0–1.0)
+  → GroundingConfidence (Certain/Strong/Moderate/Weak/Speculative/Unsupported)
 ```
 
-Confidence decays through graph edges at fixed rates:
-- `DirectSymbolBinding` × 1.00
-- `ExplicitInvocation` × 0.95
-- `ControlFlow` × 0.92
-- `DataFlow` × 0.90
-- `PropagationInference` × 0.60
-- `SpeculativeExpansion` × 0.40
+边缘衰减率:
+- DirectSymbolBinding × 1.00
+- ExplicitInvocation × 0.95
+- ControlFlow × 0.92
+- DataFlow × 0.90
+- Inheritance × 0.88
+- ConfigurationBinding × 0.85
+- SemanticSimilarity × 0.75
+- PropagationInference × 0.60
+- SpeculativeExpansion × 0.40
 
-## Contradiction Types
+## 可信度裁定
 
-| Type | Severity |
+| 裁定 | 可信任? |
 |---|---|
-| `DirectConflict` — opposing claims about same subject | Severe |
-| `ShadowAbstraction` — abstraction without evidence | Severe |
-| `UnsupportedInference` — inference without evidence | Severe |
-| `ConfidenceConflict` — confidence gap on same subject | Moderate |
-| `SemanticDrift` — diverging semantics on same symbol | Moderate |
-| `StaleGrounding` — speculative ancestry in evidence | Moderate |
-| `DivergentImplementation` — non-overlapping evidence | Mild |
+| StronglyGrounded | ✅ 高度可信 |
+| PartiallyVerified | ⚠️ 审慎使用 |
+| RuntimeIncomplete | ⚠️ 动态行为不明 |
+| CompetingHypothesesPresent | ❌ 存在竞争解释 |
+| LimitedEvidence | ❌ 证据不足 |
+| RequiresFurtherInvestigation | ❌ 需更多分析 |
+
+## 自验证层
+
+```
+5维评分: 接地(30%) + 覆盖(25%) + 校准(20%) + 假设(10%) + 可用(15%)
+  → Approved / Qualified / NeedsReview / Rejected
+```
