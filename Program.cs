@@ -8,18 +8,18 @@
 //   dotnet run --load <path>           → load repo and enter REPL immediately
 //   dotnet run --web                   → start Web API + cognition server
 //   dotnet run --benchmark <path>      → semantic retrieval benchmark
+//   dotnet run --mcp --repo <path>     → MCP server (stdio) for AI agents
 // =============================================================================
 
 using System.Text;
 using App.Cli;
+using App.Infrastructure;
+using App.Mcp;
 using App.WebApi;
 using Core.Cognition.SemanticDoc;
 using Core.Enterprise;
 using Core.Export;
 using Core.Graph;
-using Core.Graph.Analysis;
-using Core.Graph.Analysis.Analyzers;
-using Core.Graph.Analysis.GenericResolution;
 using Core.Graph.Query;
 using Core.Retrieval.Embedding;
 using Core.Retrieval.Evaluation;
@@ -49,6 +49,10 @@ else if (cliArgs.Contains("--benchmark") || cliArgs.Contains("-b"))
 else if (cliArgs.Contains("--scan") || cliArgs.Contains("-s"))
 {
     await RunLegacyScanMode(cliArgs);
+}
+else if (cliArgs.Contains("--mcp"))
+{
+    await RunMcpMode(cliArgs);
 }
 else
 {
@@ -205,17 +209,14 @@ static async Task RunLegacyScanMode(List<string> cliArgs)
             var scan = await scanner.ScanAsync(scanPath);
             var scanOutputPath = await CodeUnitJsonExporter.SaveAsync(scan);
 
-            var nhibernateAnalyzer = new NHibernateAnalyzer();
-            var genericAnalyzer = new NhSessionGenericAnalyzer();
-            var graphOrchestrator = new CodeGraphAnalysisOrchestrator(new IGraphAnalyzer[]
-            {
-                new AspNetRouteAnalyzer(),
-                new SpringBeanAnalyzer(),
-                new SpringContextObjectAnalyzer(),
-                nhibernateAnalyzer,
-                genericAnalyzer
-            });
-            var graphBuild = graphOrchestrator.BuildAndAnalyze(scan);
+            var cacheDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "ContextEngine", "cache");
+            var loader = new RepositoryLoader(cacheDir);
+            var loadResult = await loader.LoadAsync(scanPath);
+            if (!loadResult.Success) { Console.WriteLine($"分析失败: {loadResult.Error}"); continue; }
+
+            var graphBuild = loadResult.BuildResult;
             var graphPath = await CodeGraphJsonExporter.SaveAsync(graphBuild.Graph);
             var graphQuery = new GraphQueryService(graphBuild);
 
@@ -338,15 +339,14 @@ static async Task RunBenchmarkMode(List<string> cliArgs)
     }
 
     Console.WriteLine($"加载仓库: {path}");
-    var scanner = new ProjectCodeScanner();
-    var scan = await scanner.ScanAsync(path);
+    var cacheDir = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "ContextEngine", "cache");
+    var loader = new RepositoryLoader(cacheDir);
+    var loadResult = await loader.LoadAsync(path);
+    if (!loadResult.Success) { Console.WriteLine($"加载失败: {loadResult.Error}"); return; }
 
-    var orchestrator = new CodeGraphAnalysisOrchestrator(new IGraphAnalyzer[]
-    {
-        new AspNetRouteAnalyzer(), new SpringBeanAnalyzer(),
-        new SpringContextObjectAnalyzer(), new NHibernateAnalyzer(), new NhSessionGenericAnalyzer(),
-    });
-    var buildResult = orchestrator.BuildAndAnalyze(scan);
+    var buildResult = loadResult.BuildResult;
     var graphQuery = new GraphQueryService(buildResult);
     Console.WriteLine($"  节点: {buildResult.Graph.Nodes.Count}, 边: {buildResult.Graph.Edges.Count}");
 
@@ -384,4 +384,46 @@ static async Task RunBenchmarkMode(List<string> cliArgs)
     var analyzer = new BenchmarkFailureAnalyzer();
     var failureReport = analyzer.Analyze();
     Console.WriteLine(failureReport.GenerateReport());
+}
+
+// ═══════════════════════════════════════════════════════════════
+// MCP Mode — Model Context Protocol server over stdio
+// ═══════════════════════════════════════════════════════════════
+
+static async Task RunMcpMode(List<string> cliArgs)
+{
+    var repoIdx = cliArgs.IndexOf("--repo");
+    if (repoIdx < 0) repoIdx = cliArgs.IndexOf("-r");
+    var path = repoIdx >= 0 && repoIdx + 1 < cliArgs.Count ? cliArgs[repoIdx + 1] : null;
+
+    if (path is null)
+    {
+        Console.Error.WriteLine("用法: dotnet run -- --mcp --repo <仓库路径>");
+        return;
+    }
+
+    var cacheDir = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "ContextEngine", "cache");
+    Directory.CreateDirectory(cacheDir);
+
+    var loader = new RepositoryLoader(cacheDir);
+    var result = await loader.LoadAsync(Path.GetFullPath(path));
+
+    if (!result.Success)
+    {
+        Console.Error.WriteLine($"加载失败: {result.Error}");
+        return;
+    }
+
+    var graphQuery = new GraphQueryService(result.BuildResult);
+    var tools = new ContextEngineMcpTools(graphQuery);
+    var server = new McpServer(tools);
+
+    Console.Error.WriteLine($"ContextEngine MCP server started");
+    Console.Error.WriteLine($"  Repo: {result.RepositoryPath}");
+    Console.Error.WriteLine($"  Nodes: {result.NodeCount}, Edges: {result.EdgeCount}");
+    Console.Error.WriteLine($"  From cache: {result.IsFromCache}");
+
+    await server.RunAsync();
 }

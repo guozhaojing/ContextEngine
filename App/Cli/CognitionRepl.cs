@@ -10,14 +10,10 @@
 // =============================================================================
 using System.Diagnostics;
 using System.Text;
+using App.Infrastructure;
 using Core.Cognition.Patching;
 using Core.Experience;
-using Core.Graph;
-using Core.Graph.Analysis;
-using Core.Graph.Analysis.Analyzers;
-using Core.Graph.Analysis.GenericResolution;
 using Core.Observability;
-using Core.Scanning;
 using Core.SelfValidation;
 using Core.Verification;
 using Core.Cognition.Epistemics;
@@ -27,7 +23,7 @@ namespace App.Cli;
 
 public sealed class CognitionRepl
 {
-    private readonly RepositoryCache _cache;
+    private readonly RepositoryLoader _loader;
     private readonly string _cacheDir;
     private RepositorySession? _session;
     private InteractiveCognitionSession? _interactive;
@@ -69,7 +65,7 @@ public sealed class CognitionRepl
     public CognitionRepl(string cacheDir)
     {
         _cacheDir = cacheDir;
-        _cache = new RepositoryCache(cacheDir);
+        _loader = new RepositoryLoader(cacheDir);
     }
 
     public async Task RunAsync()
@@ -230,7 +226,7 @@ public sealed class CognitionRepl
             {
                 if (_session is not null)
                 {
-                    _cache.Invalidate(_session.RepositoryPath);
+                    _loader.InvalidateCache(_session.RepositoryPath);
                     await LoadRepository(_session.RepositoryPath);
                 }
                 else
@@ -310,50 +306,24 @@ public sealed class CognitionRepl
 
     private async Task LoadRepositoryInternal(string path)
     {
-        if (!Directory.Exists(path) && !File.Exists(path))
-        {
-            Console.WriteLine($"路径不存在: {path}");
-            return;
-        }
-
         Console.WriteLine($"正在加载: {path}");
         var sw = Stopwatch.StartNew();
 
-        var buildResult = await _cache.LoadAsync(path);
-
-        if (buildResult is not null)
+        var result = await _loader.LoadAsync(path);
+        if (!result.Success)
         {
-            Console.WriteLine("  从缓存加载。");
+            Console.WriteLine(result.Error);
+            return;
         }
-        else
-        {
-            Console.WriteLine("  扫描源文件...");
 
-            var scanner = new ProjectCodeScanner();
-            var scan = await scanner.ScanAsync(path);
-            Console.WriteLine($"  发现 {scan.TotalCodeUnits} 个方法, {scan.Projects.Count} 个项目。");
+        Console.WriteLine(result.IsFromCache ? "  从缓存加载。" : $"  扫描完成: {result.NodeCount} 个节点, {result.EdgeCount} 条边。");
 
-            Console.WriteLine("  构建代码图并运行分析器...");
-            var orchestrator = new CodeGraphAnalysisOrchestrator(new IGraphAnalyzer[]
-            {
-                new AspNetRouteAnalyzer(),
-                new SpringBeanAnalyzer(),
-                new SpringContextObjectAnalyzer(),
-                new NHibernateAnalyzer(),
-                new NhSessionGenericAnalyzer(),
-            });
-
-            buildResult = orchestrator.BuildAndAnalyze(scan);
-            Console.WriteLine($"  图构建完成: {buildResult.Graph.Nodes.Count} 个节点, {buildResult.Graph.Edges.Count} 条边。");
-
-            Console.WriteLine("  写入缓存...");
-            await _cache.SaveAsync(path, buildResult);
-        }
+        var buildResult = result.BuildResult;
 
         var sessionConfig = new RepositorySessionConfig
         {
             RepositoryPath = path,
-            RepositoryName = Path.GetFileName(path.TrimEnd('/', '\\')),
+            RepositoryName = result.RepositoryName,
         };
 
         _session = new RepositorySession(sessionConfig);
@@ -363,10 +333,10 @@ public sealed class CognitionRepl
 
         sw.Stop();
         Console.WriteLine($"仓库已加载。({sw.Elapsed.TotalSeconds:F1}秒)");
-        Console.WriteLine($"  项目:      {buildResult.Graph.Nodes.Select(n => n.ProjectName).Distinct().Count()}");
-        Console.WriteLine($"  节点:      {buildResult.Graph.Nodes.Count}");
-        Console.WriteLine($"  边:        {buildResult.Graph.Edges.Count}");
-        Console.WriteLine($"  事实:      {buildResult.Graph.Facts.Count}");
+        Console.WriteLine($"  项目:      {result.ProjectCount}");
+        Console.WriteLine($"  节点:      {result.NodeCount}");
+        Console.WriteLine($"  边:        {result.EdgeCount}");
+        Console.WriteLine($"  事实:      {result.FactCount}");
         Console.WriteLine();
         Console.WriteLine("就绪。试试: ask \"解释架构\"");
     }
@@ -504,7 +474,7 @@ public sealed class CognitionRepl
             return;
         }
 
-        var info = _cache.GetInfo(_session.RepositoryPath);
+        var info = _loader.Cache.GetInfo(_session.RepositoryPath);
         if (info is not null)
         {
             Console.WriteLine();
