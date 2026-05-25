@@ -1,18 +1,25 @@
 using System.Text.Json;
+using Core.Cognition;
+using Core.Cognition.Epistemics;
+using Core.Experience;
 using Core.Graph;
 using Core.Graph.Indexing;
 using Core.Graph.Query;
+using Core.SelfValidation;
+using Core.Verification;
 
 namespace App.Mcp;
 
 public sealed class ContextEngineMcpTools
 {
     private readonly GraphQueryService _query;
+    private readonly RepositorySession? _session;
     private readonly McpToolDefinition[] _definitions;
 
-    public ContextEngineMcpTools(GraphQueryService query)
+    public ContextEngineMcpTools(GraphQueryService query, RepositorySession? session = null)
     {
         _query = query;
+        _session = session;
         _definitions = BuildDefinitions();
     }
 
@@ -35,6 +42,10 @@ public sealed class ContextEngineMcpTools
             "ce_get_edges" => GetEdges(args),
             "ce_get_stats" => GetStats(),
             "ce_find_semantic_path" => FindSemanticPath(args),
+            "ce_ask" => Ask(args),
+            "ce_verify" => Verify(args),
+            "ce_self_critique" => SelfCritique(args),
+            "ce_epistemic_boundary" => EpistemicBoundary(args),
             _ => throw new KeyNotFoundException($"Unknown tool: {name}"),
         };
     }
@@ -259,7 +270,198 @@ public sealed class ContextEngineMcpTools
         return new { fromId, toId, paths = result, total = result.Count };
     }
 
+    // ── Cognitive tools ──
+
+    private object Ask(Dictionary<string, JsonElement> args)
+    {
+        EnsureSession();
+        var question = GetStringArg(args, "question");
+        var result = _session!.Query(question);
+        return SerializeCognitionResult(result);
+    }
+
+    private object Verify(Dictionary<string, JsonElement> args)
+    {
+        EnsureSession();
+        var question = GetStringArg(args, "question");
+        var result = _session!.Query(question);
+
+        var epistemic = new EpistemicBoundary(_session.QueryService!).Analyze(result, question);
+        var orchestrator = new VerificationOrchestrator();
+        var report = orchestrator.Verify(result, epistemic);
+
+        return new
+        {
+            question,
+            verdict = report.Verdict.ToString(),
+            verdictDisplay = report.Verdict.ToDisplayText(),
+            trustScore = Math.Round(report.OverallTrustScore, 3),
+            summary = report.Summary,
+            grounding = new
+            {
+                score = report.Grounding.Score,
+                totalCitations = report.Grounding.TotalCitations,
+                citationsWithFiles = report.Grounding.CitationsWithFiles,
+                citationsWithSymbols = report.Grounding.CitationsWithSymbols,
+                issues = report.Grounding.Issues,
+            },
+            coverage = new
+            {
+                score = report.Coverage.Score,
+                resolutionConfidence = report.Coverage.ResolutionConfidence,
+                analysisCompleteness = report.Coverage.AnalysisCompleteness,
+                unresolvedDispatchCount = report.Coverage.UnresolvedDispatchCount,
+                issues = report.Coverage.Issues,
+            },
+            calibration = new
+            {
+                score = report.Calibration.Score,
+                isOverConfident = report.Calibration.IsOverConfident,
+                claimedConfidence = report.Calibration.ClaimedConfidence,
+                evidenceBasedConfidence = report.Calibration.EvidenceBasedConfidence,
+                issues = report.Calibration.Issues,
+            },
+            hypotheses = new
+            {
+                score = report.Hypotheses.Score,
+                competingCount = report.Hypotheses.CompetingHypothesisCount,
+                hasPlausibleAlternatives = report.Hypotheses.HasPlausibleAlternatives,
+                alternatives = report.Hypotheses.Alternatives,
+                issues = report.Hypotheses.Issues,
+            },
+            utility = new
+            {
+                score = report.Utility.Score,
+                isActionable = report.Utility.IsActionable,
+                hasEngineeringGuidance = report.Utility.HasEngineeringGuidance,
+                issues = report.Utility.Issues,
+            },
+        };
+    }
+
+    private object SelfCritique(Dictionary<string, JsonElement> args)
+    {
+        EnsureSession();
+        var question = GetStringArg(args, "question");
+        var result = _session!.Query(question);
+
+        var epistemic = new EpistemicBoundary(_session.QueryService!).Analyze(result, question);
+        var evaluator = new ResponseSelfEvaluator();
+        var evaluation = evaluator.Evaluate(result, epistemic);
+        var riskAnalyzer = new EpistemicRiskAnalyzer();
+        var riskReport = riskAnalyzer.Analyze(result, epistemic);
+        var gapDetector = new InvestigationGapDetector();
+        var gapReport = gapDetector.Detect(result, epistemic);
+        var critiqueGen = new SelfCritiqueGenerator();
+        var critique = critiqueGen.Generate(evaluation, riskReport, gapReport, result);
+
+        return new
+        {
+            question,
+            critiqueId = critique.CritiqueId,
+            honestyStatement = critique.OverallHonestyStatement,
+            isHighQuality = critique.IsHighQuality,
+            weaknesses = critique.Weaknesses,
+            unknowns = critique.Unknowns,
+            confidenceReductions = critique.ConfidenceReductions,
+            evaluation = new
+            {
+                overallScore = Math.Round(evaluation.OverallScore, 3),
+                groundingScore = Math.Round(evaluation.GroundingScore, 3),
+                epistemicHonestyScore = Math.Round(evaluation.EpistemicHonestyScore, 3),
+                completenessScore = Math.Round(evaluation.CompletenessScore, 3),
+                precisionScore = Math.Round(evaluation.PrecisionScore, 3),
+                contradictionScore = Math.Round(evaluation.ContradictionScore, 3),
+                qualitySummary = evaluation.QualitySummary,
+                passesQualityThreshold = evaluation.PassesQualityThreshold,
+                recommendedAction = evaluation.RecommendedAction.ToString(),
+                findings = evaluation.Findings.Select(f => new { kind = f.Kind.ToString(), description = f.Description }).ToList(),
+            },
+        };
+    }
+
+    private object EpistemicBoundary(Dictionary<string, JsonElement> args)
+    {
+        EnsureSession();
+        var question = GetStringArg(args, "question");
+        var result = _session!.Query(question);
+
+        var epistemic = new Core.Cognition.Epistemics.EpistemicBoundary(_session.QueryService!);
+        var report = epistemic.Analyze(result, question);
+
+        return new
+        {
+            question,
+            reportId = report.ReportId,
+            canPresentAsDefinitiveConclusion = report.CanPresentAsDefinitiveConclusion,
+            searchedNodeCount = report.SearchedNodeCount,
+            totalNetworkSize = report.TotalNetworkSize,
+            groundedPresentCount = report.GroundedPresentCount,
+            groundedAbsentCount = report.GroundedAbsentCount,
+            unresolvedCount = report.UnresolvedCount,
+            incompleteCount = report.IncompleteCount,
+            notSearchedCount = report.NotSearchedCount,
+            confidence = new
+            {
+                entityResolution = Math.Round(report.Confidence.EntityResolution, 3),
+                impactAnalysis = Math.Round(report.Confidence.ImpactAnalysis, 3),
+                runtimeCompleteness = Math.Round(report.Confidence.RuntimeCompleteness, 3),
+                isHighConfidence = report.Confidence.IsHighConfidence,
+            },
+            annotations = report.Annotations.Select(a => new
+            {
+                subject = a.Subject,
+                evidenceState = a.EvidenceState.ToString(),
+                explanation = a.Explanation,
+                confidence = a.Confidence.ToString(),
+            }).ToList(),
+            coverageGaps = report.CoverageGaps.Select(g => new
+            {
+                gapType = g.GapType,
+                description = g.Description,
+                suggestedAction = g.SuggestedAction,
+                severity = g.Severity.ToString(),
+            }).ToList(),
+        };
+    }
+
     // ── Helpers ──
+
+    private void EnsureSession()
+    {
+        if (_session is null || !_session.IsLoaded)
+            throw new InvalidOperationException("认知工具需要加载仓库。请先使用 ContextEngine 加载代码库。");
+    }
+
+    private static object SerializeCognitionResult(CognitionResult result)
+    {
+        return new
+        {
+            resultId = result.ResultId,
+            query = result.Query,
+            resultType = result.ResultType.ToString(),
+            overallConfidence = result.OverallConfidence.ToString(),
+            evidenceCount = result.EvidenceCount,
+            explanations = result.Explanations.Select(e => new
+            {
+                text = e.Text,
+                claim = e.Claim,
+                confidenceLevel = e.ConfidenceLevel.ToString(),
+                supportingNodeIds = e.SupportingNodeIds,
+                supportingSourceFiles = e.SupportingSourceFiles,
+            }).ToList(),
+            citations = result.Citations.Select(c => new
+            {
+                sourceNodeId = c.SourceNodeId,
+                sourceNodeLabel = c.SourceNodeLabel,
+                sourceFile = c.SourceFile,
+                symbolHandle = c.SymbolHandle,
+                confidenceLevel = c.ConfidenceLevel.ToString(),
+                edgeKind = c.EdgeKind,
+                layer = c.Layer,
+            }).ToList(),
+        };
+    }
 
     private object NodeSummary(string id)
     {
@@ -368,6 +570,34 @@ public sealed class ContextEngineMcpTools
                 new("fromId", "string", true, "Source node ID"),
                 new("toId", "string", true, "Target node ID"),
                 new("maxDepth", "number", false, "Max hops (default 15)"),
+            },
+        },
+        new("ce_ask", "Ask a natural language engineering question about the loaded codebase. The query is automatically routed to the most appropriate cognition engine (architecture explorer, impact analyzer, capability mapper, or root cause explorer). Returns grounded, citation-backed analysis with evidence references.")
+        {
+            Parameters =
+            {
+                new("question", "string", true, "Natural language question about the codebase, e.g. '解释支付架构' or '改动 RetryPolicy 会有什么影响?'"),
+            },
+        },
+        new("ce_verify", "Verify the trustworthiness of a cognition result. Runs 5 verifiers (grounding, coverage, calibration, hypotheses, utility) and returns a detailed trustworthiness verdict. Use this after ce_ask to check if the answer is reliable.")
+        {
+            Parameters =
+            {
+                new("question", "string", true, "The same question used in ce_ask to verify"),
+            },
+        },
+        new("ce_self_critique", "Generate an honest system self-critique of a cognition response. Identifies weaknesses, unknowns, and reasons to reduce confidence. Produces a self-evaluation across 5 dimensions (grounding, epistemic honesty, completeness, precision, contradiction).")
+        {
+            Parameters =
+            {
+                new("question", "string", true, "The question to self-critique the answer for"),
+            },
+        },
+        new("ce_epistemic_boundary", "Analyze the epistemic boundary of a cognition result: what evidence states exist (grounded present, grounded absent, unresolved dispatch, incomplete analysis, not searched), coverage gaps, and whether the result can be presented as a definitive conclusion.")
+        {
+            Parameters =
+            {
+                new("question", "string", true, "The question to analyze epistemic boundaries for"),
             },
         },
     };

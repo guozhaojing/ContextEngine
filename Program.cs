@@ -19,6 +19,7 @@ using App.WebApi;
 using Core.Cognition.SemanticDoc;
 using Core.Enterprise;
 using Core.Export;
+using Core.Experience;
 using Core.Graph;
 using Core.Graph.Query;
 using Core.Retrieval.Embedding;
@@ -417,13 +418,23 @@ static async Task RunMcpMode(List<string> cliArgs)
     }
 
     var graphQuery = new GraphQueryService(result.BuildResult);
-    var tools = new ContextEngineMcpTools(graphQuery);
+
+    var sessionConfig = new RepositorySessionConfig
+    {
+        RepositoryPath = result.RepositoryPath,
+        RepositoryName = result.RepositoryName,
+    };
+    var session = new RepositorySession(sessionConfig);
+    session.Load(result.BuildResult);
+
+    var tools = new ContextEngineMcpTools(graphQuery, session);
     var server = new McpServer(tools);
 
     Console.Error.WriteLine($"ContextEngine MCP server started");
     Console.Error.WriteLine($"  Repo: {result.RepositoryPath}");
     Console.Error.WriteLine($"  Nodes: {result.NodeCount}, Edges: {result.EdgeCount}");
     Console.Error.WriteLine($"  From cache: {result.IsFromCache}");
+    Console.Error.WriteLine($"  Cognition tools: ce_ask, ce_verify, ce_self_critique, ce_epistemic_boundary");
 
     await server.RunAsync();
 }
