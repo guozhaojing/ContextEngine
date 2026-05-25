@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Core.Cognition;
 using Core.Cognition.Epistemics;
+using Core.Cognition.Patching;
 using Core.Experience;
 using Core.Graph;
 using Core.Graph.Indexing;
@@ -46,6 +47,7 @@ public sealed class ContextEngineMcpTools
             "ce_verify" => Verify(args),
             "ce_self_critique" => SelfCritique(args),
             "ce_epistemic_boundary" => EpistemicBoundary(args),
+            "ce_patch" => Patch(args),
             _ => throw new KeyNotFoundException($"Unknown tool: {name}"),
         };
     }
@@ -425,6 +427,66 @@ public sealed class ContextEngineMcpTools
         };
     }
 
+    private object Patch(Dictionary<string, JsonElement> args)
+    {
+        EnsureSession();
+        var request = GetStringArg(args, "request");
+
+        var conventionAnalyzer = new ConventionAnalyzer(_session!.QueryService!);
+        var planner = new PatchPlanner(
+            _session.QueryService!, conventionAnalyzer,
+            _session.ArchitectureExplorer!, _session.ImpactAnalyzer!);
+        var generator = new GroundedPatchGenerator();
+        var validator = new PatchImpactValidator(_session.QueryService!, _session.ConfidenceEngine!);
+        var etp = new ExplainThenPatch(planner, generator, validator);
+
+        var result = etp.ExplainAndPatch(request, _session.RepositoryName);
+
+        return new
+        {
+            request,
+            resultId = result.ResultId,
+            overallConfidence = result.OverallConfidence.ToString(),
+            explanation = result.Explanation,
+            plan = new
+            {
+                planId = result.Plan.PlanId,
+                strategy = result.Plan.Strategy,
+                planConfidence = result.Plan.PlanConfidence.ToString(),
+                modificationPoints = result.Plan.ModificationPoints.Select(m => new
+                {
+                    targetNodeId = m.TargetNodeId,
+                    targetLabel = m.TargetLabel,
+                    targetKind = m.TargetKind,
+                    sourceFile = m.SourceFile,
+                    reason = m.Reason,
+                    affectedCallers = m.AffectedCallers,
+                    affectedCallees = m.AffectedCallees,
+                    confidence = m.Confidence.ToString(),
+                }).ToList(),
+                impactedServices = result.Plan.ImpactedServices,
+            },
+            validation = new
+            {
+                reportId = result.Validation.ReportId,
+                isSafe = result.Validation.IsSafe,
+                overallRisk = result.Validation.OverallRisk.ToString(),
+                riskFactors = result.Validation.RiskFactors,
+                validatedPaths = result.Validation.ValidatedPaths,
+            },
+            patches = result.Patches.Select(p => new
+            {
+                patchId = p.PatchId,
+                targetFile = p.TargetFile,
+                description = p.Description,
+                generatedCode = p.GeneratedCode,
+                explanation = p.Explanation,
+                confidence = p.Confidence.ToString(),
+                conventionsApplied = p.ConventionsApplied,
+            }).ToList(),
+        };
+    }
+
     // ── Helpers ──
 
     private void EnsureSession()
@@ -598,6 +660,13 @@ public sealed class ContextEngineMcpTools
             Parameters =
             {
                 new("question", "string", true, "The question to analyze epistemic boundaries for"),
+            },
+        },
+        new("ce_patch", "Generate a grounded code patch for a natural language modification request. Explains what to change and why, then produces code suggestions grounded in the codebase's conventions (naming, DI, logging, async patterns). Returns explanation, modification plan, impact validation, and generated patches.")
+        {
+            Parameters =
+            {
+                new("request", "string", true, "Natural language modification request, e.g. '给 PaymentService 添加重试逻辑' or '为 UserController 增加日志'"),
             },
         },
     };
