@@ -39,15 +39,20 @@ public static class WebApiEndpoints
             var req = await httpReq.ReadFromJsonAsync<LoadRequest>(JsonOptions);
             if (req is null || string.IsNullOrWhiteSpace(req.Path))
                 return Results.BadRequest(new { error = "路径不能为空" });
-            var result = await sessionManager.LoadRepositoryAsync(req.Path, req.ForceReload);
-            return result.Success ? Results.Json(result, JsonOptions) : Results.BadRequest(new { error = result.Error });
+            var result = sessionManager.StartLoad(req.Path, req.ForceReload);
+            if (!result.Success)
+                return Results.BadRequest(new { error = result.Error });
+            return Results.Json(new { loading = true, name = result.RepositoryName }, JsonOptions);
         });
 
-        app.MapPost("/api/reload", async () =>
+        app.MapGet("/api/load/status", () => Results.Json(sessionManager.GetLoadStatus(), JsonOptions));
+
+        app.MapPost("/api/reload", () =>
         {
             if (sessionManager.CurrentPath is null) return Results.BadRequest(new { error = "请先加载仓库" });
-            var result = await sessionManager.ReloadAsync();
-            return result.Success ? Results.Json(result, JsonOptions) : Results.BadRequest(new { error = result.Error });
+            if (sessionManager.IsLoading) return Results.BadRequest(new { error = "加载已在进行中" });
+            _ = sessionManager.StartLoad(sessionManager.CurrentPath, forceReload: true);
+            return Results.Json(new { loading = true }, JsonOptions);
         });
 
         app.MapPost("/api/cache/clear", async (HttpRequest httpReq) =>
@@ -201,7 +206,8 @@ public static class WebApiEndpoints
 
         var llmProvider = new LlmProvider(llmConfig);
         var pipeline = new CodeFixPipeline(sessionManager.Session!.QueryService!,
-            new PipelineOptions { ProjectPath = req.ProjectPath ?? sessionManager.CurrentPath });
+            new PipelineOptions { ProjectPath = req.ProjectPath ?? sessionManager.CurrentPath },
+            sessionManager.Session.SemanticSearch);
 
         var request = new CodeFixRequest
         {

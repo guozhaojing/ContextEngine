@@ -74,6 +74,21 @@ public sealed class ProjectSemanticModelProvider : IAsyncDisposable
         return Task.FromResult(compilation.GetSemanticModel(syntaxTree));
     }
 
+    /// <summary>
+    /// Get a SemanticModel from the finalized project compilation.
+    /// Call only after <see cref="FinalizeProject"/>.
+    /// </summary>
+    public SemanticModel GetSemanticModel(string projectFilePath, SyntaxTree syntaxTree)
+    {
+        lock (_lock)
+        {
+            if (_caches.TryGetValue(projectFilePath, out var cc) && cc.Compilation is not null)
+                return cc.Compilation.GetSemanticModel(syntaxTree);
+        }
+        throw new InvalidOperationException(
+            $"Project not finalized: {projectFilePath}. Call FinalizeProject() first.");
+    }
+
     public ValueTask DisposeAsync()
     {
         lock (_lock) { _caches.Clear(); }

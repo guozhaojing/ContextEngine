@@ -1,14 +1,12 @@
 // =============================================================================
-// Scanning/ProjectCodeScanner.cs — 项目源码扫描器
+// Scanning/ProjectCodeScanner.cs — 项目源码扫描器 (two-pass parallel)
 // =============================================================================
-// 职责：
-//   1. 枚举每个项目下的 .cs 文件
-//   2. 用 SyntaxTree 解析类与方法
-//   3. 用 SemanticModel + InvocationSemanticResolver 解析方法内的调用
-//   4. 输出 CodeUnit 列表
-// 注意：此处不做图构建，不做图查询。
+// Pass 1: parallel parse all .cs files, add syntax trees to provider.
+// Pass 2: finalize project compilation, then parallel resolve semantics.
 // =============================================================================
 
+using System.Collections.Concurrent;
+using App.Infrastructure;
 using Core.Graph.Identity;
 using Core.Models;
 using Core.Semantics;
@@ -24,12 +22,16 @@ public class ProjectCodeScanner
         new(StringComparer.OrdinalIgnoreCase) { "bin", "obj", ".git", ".vs", "node_modules" };
 
     /// <summary>
-    /// 扫描指定路径（目录 / .sln / .csproj），返回所有方法的 CodeUnit。
+    /// Scan path (dir / .sln / .csproj), return all method CodeUnits.
+    /// Two-pass per project: parse all files first, then resolve with unified compilation.
     /// </summary>
     public async Task<SolutionScanResult> ScanAsync(
         string path,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IProgress<LoadProgress>? progress = null)
     {
+        progress?.Report(new LoadProgress { Stage = "discovering" });
+
         var projects = SolutionProjectDiscovery.Discover(path);
         var scanRoot = ResolveScanRoot(path);
 
@@ -38,53 +40,136 @@ public class ProjectCodeScanner
         if (projects.Count == 0)
             throw new InvalidOperationException($"No .csproj found under: {scanRoot}");
 
-        // MSBuild 提供完整 SemanticModel；失败时回退到单文件编译
         await using var semanticProvider = new ProjectSemanticModelProvider();
+        var projectIndex = 0;
 
         foreach (var project in projects)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            projectIndex++;
+
+            var projectDir = project.ProjectDirectory;
+            var projectPath = project.ProjectFilePath;
+            var relativeProjectPath = ToRelativePath(scanRoot, projectPath);
 
             var group = new ProjectScanGroup
             {
                 ProjectName = project.Name,
-                ProjectPath = ToRelativePath(scanRoot, project.ProjectFilePath)
+                ProjectPath = relativeProjectPath,
             };
 
-            foreach (var filePath in EnumerateCsFiles(project.ProjectDirectory))
+            // ── Pass 1: parallel parse all .cs files ──
+            var csFiles = EnumerateCsFiles(projectDir).ToList();
+            var totalFiles = csFiles.Count;
+
+            progress?.Report(new LoadProgress
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                Stage = "parsing",
+                CurrentProject = projectIndex,
+                TotalProjects = projects.Count,
+                CurrentFile = 0,
+                TotalFiles = totalFiles,
+            });
 
-                var sourceText = await File.ReadAllTextAsync(filePath, cancellationToken);
-                var tree = CSharpSyntaxTree.ParseText(
-                    sourceText,
-                    path: filePath,
-                    encoding: System.Text.Encoding.UTF8,
-                    cancellationToken: cancellationToken);
+            var parseResults = new ConcurrentBag<(string FilePath, SyntaxTree Tree)>();
 
-                var semanticModel = await semanticProvider
-                    .GetSemanticModelAsync(project.ProjectFilePath, tree, cancellationToken)
-                    .ConfigureAwait(false);
+            await Task.Run(() =>
+            {
+                Parallel.ForEach(csFiles, new ParallelOptions
+                {
+                    CancellationToken = cancellationToken,
+                    MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount),
+                },
+                filePath =>
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
 
-                var root = await tree.GetRootAsync(cancellationToken).ConfigureAwait(false);
-                group.CodeUnits.AddRange(ExtractCodeUnits(
-                    root,
-                    filePath,
-                    project,
-                    scanRoot,
-                    semanticModel));
-            }
+                    var sourceText = File.ReadAllText(filePath);
+                    var tree = CSharpSyntaxTree.ParseText(
+                        sourceText,
+                        path: filePath,
+                        encoding: System.Text.Encoding.UTF8,
+                        cancellationToken: cancellationToken);
 
-            group.CodeUnits = MergeDuplicateCodeUnits(group.CodeUnits);
+                    semanticProvider.AddSyntaxTree(projectPath, tree);
+                    parseResults.Add((filePath, tree));
 
+                    var current = Interlocked.Increment(ref _parseCount);
+                    if (current % 10 == 0 || current == totalFiles)
+                    {
+                        progress?.Report(new LoadProgress
+                        {
+                            Stage = "parsing",
+                            CurrentProject = projectIndex,
+                            TotalProjects = projects.Count,
+                            CurrentFile = current,
+                            TotalFiles = totalFiles,
+                            CurrentFilePath = Path.GetFileName(filePath),
+                        });
+                    }
+                });
+            }, cancellationToken);
+
+            // ── Finalize: single compilation for the entire project ──
+            progress?.Report(new LoadProgress
+            {
+                Stage = "resolving",
+                CurrentProject = projectIndex,
+                TotalProjects = projects.Count,
+                CurrentFile = 0,
+                TotalFiles = totalFiles,
+            });
+
+            semanticProvider.FinalizeProject(projectPath);
+
+            // ── Pass 2: parallel resolve semantics using unified compilation ──
+            var codeUnits = new ConcurrentBag<CodeUnit>();
+            var resolveIndex = 0;
+            var parseResultList = parseResults.ToList();
+
+            await Task.Run(() =>
+            {
+                Parallel.ForEach(parseResultList, new ParallelOptions
+                {
+                    CancellationToken = cancellationToken,
+                    MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount),
+                },
+                item =>
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    var semanticModel = semanticProvider.GetSemanticModel(projectPath, item.Tree);
+                    var root = item.Tree.GetRoot(cancellationToken);
+
+                    foreach (var unit in ExtractCodeUnits(root, item.FilePath, project, scanRoot, semanticModel))
+                        codeUnits.Add(unit);
+
+                    var current = Interlocked.Increment(ref resolveIndex);
+                    if (current % 10 == 0 || current == totalFiles)
+                    {
+                        progress?.Report(new LoadProgress
+                        {
+                            Stage = "resolving",
+                            CurrentProject = projectIndex,
+                            TotalProjects = projects.Count,
+                            CurrentFile = current,
+                            TotalFiles = totalFiles,
+                            CurrentFilePath = Path.GetFileName(item.FilePath),
+                        });
+                    }
+                });
+            }, cancellationToken);
+
+            group.CodeUnits = MergeDuplicateCodeUnits(codeUnits.ToList());
             result.Projects.Add(group);
-
-            // Finalize project compilation for cross-file resolution
-            semanticProvider.FinalizeProject(project.ProjectFilePath);
         }
 
+        progress?.Report(new LoadProgress { Stage = "complete", IsComplete = true });
         return result;
     }
+
+    // Shared counter for progress across parallel loops (static to avoid capturing)
+    private int _parseCount;
 
     private static string ResolveScanRoot(string path)
     {

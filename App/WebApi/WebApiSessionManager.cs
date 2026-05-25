@@ -19,6 +19,10 @@ public sealed class WebApiSessionManager
     private readonly string _cacheDir;
     private string? _currentPath;
     private List<RepositoryHistoryEntry> _history = new();
+    private Task<LoadResult>? _loadTask;
+    public LoadProgress? CurrentProgress { get; private set; }
+    public LoadResult? LastLoadResult { get; private set; }
+    public bool IsLoading => _loadTask is { IsCompleted: false };
 
     public WebApiSessionManager(string cacheDir)
     {
@@ -122,9 +126,50 @@ public sealed class WebApiSessionManager
     public string? CurrentPath => _currentPath;
     public bool IsFromCache { get; private set; }
 
+    public LoadResult StartLoad(string path, bool forceReload = false)
+    {
+        if (IsLoading)
+            return new LoadResult { Success = false, Error = "仓库加载正在进行中，请等待完成。" };
+
+        LastLoadResult = null;
+        CurrentProgress = new LoadProgress { Stage = "discovering" };
+
+        _loadTask = Task.Run(async () =>
+        {
+            try
+            {
+                var progress = new Progress<LoadProgress>(p =>
+                {
+                    CurrentProgress = p;
+                });
+
+                var result = await _loader.LoadAsync(path, forceReload, progress);
+                if (!result.Success)
+                {
+                    LastLoadResult = new LoadResult { Success = false, Error = result.Error };
+                    return LastLoadResult;
+                }
+
+                _currentPath = path;
+                IsFromCache = result.IsFromCache;
+
+                LastLoadResult = ActivateSession(path, result.BuildResult, fromCache: result.IsFromCache);
+                return LastLoadResult;
+            }
+            catch (Exception ex)
+            {
+                LastLoadResult = new LoadResult { Success = false, Error = ex.Message };
+                return LastLoadResult;
+            }
+        });
+
+        return new LoadResult { Success = true, RepositoryName = Path.GetFileName(path.TrimEnd('/', '\\')), FromCache = false };
+    }
+
     public async Task<LoadResult> LoadRepositoryAsync(string path, bool forceReload = false)
     {
-        var result = await _loader.LoadAsync(path, forceReload);
+        var progress = new Progress<LoadProgress>(p => CurrentProgress = p);
+        var result = await _loader.LoadAsync(path, forceReload, progress);
         if (!result.Success)
             return new LoadResult { Success = false, Error = result.Error };
 
@@ -132,6 +177,34 @@ public sealed class WebApiSessionManager
         IsFromCache = result.IsFromCache;
 
         return ActivateSession(path, result.BuildResult, fromCache: result.IsFromCache);
+    }
+
+    public object GetLoadStatus()
+    {
+        if (_loadTask is null && CurrentProgress is null)
+            return new { loading = false };
+
+        if (_loadTask is { IsCompleted: true })
+        {
+            _loadTask = null;
+            CurrentProgress = null;
+            return new { loading = false, complete = true, result = LastLoadResult };
+        }
+
+        return new
+        {
+            loading = true,
+            progress = CurrentProgress is null ? null : new
+            {
+                stage = CurrentProgress.Stage,
+                percent = CurrentProgress.PercentComplete,
+                currentProject = CurrentProgress.CurrentProject,
+                totalProjects = CurrentProgress.TotalProjects,
+                currentFile = CurrentProgress.CurrentFile,
+                totalFiles = CurrentProgress.TotalFiles,
+                currentFilePath = CurrentProgress.CurrentFilePath,
+            }
+        };
     }
 
     public async Task<LoadResult> ReloadAsync()

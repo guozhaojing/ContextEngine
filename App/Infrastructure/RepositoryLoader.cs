@@ -1,8 +1,11 @@
 using App.Cli;
+using Core.Cognition.SemanticDoc;
 using Core.Graph;
 using Core.Graph.Analysis;
 using Core.Graph.Analysis.Analyzers;
 using Core.Graph.Analysis.GenericResolution;
+using Core.Retrieval.Embedding;
+using Core.Retrieval.VectorStore;
 using Core.Scanning;
 
 namespace App.Infrastructure;
@@ -18,7 +21,8 @@ public sealed class RepositoryLoader
 
     public RepositoryCache Cache => _cache;
 
-    public async Task<RepositoryLoadResult> LoadAsync(string path, bool forceReload = false)
+    public async Task<RepositoryLoadResult> LoadAsync(string path, bool forceReload = false,
+        IProgress<LoadProgress>? progress = null)
     {
         if (!Directory.Exists(path) && !File.Exists(path))
             return RepositoryLoadResult.Fail($"路径不存在: {path}");
@@ -27,17 +31,44 @@ public sealed class RepositoryLoader
         {
             var cached = await _cache.LoadAsync(path);
             if (cached is not null)
+            {
+                progress?.Report(new LoadProgress { Stage = "complete", IsComplete = true });
                 return RepositoryLoadResult.FromCache(cached, path);
+            }
         }
 
-        var scanner = new ProjectCodeScanner();
-        var scan = await scanner.ScanAsync(path);
+        progress?.Report(new LoadProgress { Stage = "parsing", CurrentFile = 0, TotalFiles = 0 });
 
+        var scanner = new ProjectCodeScanner();
+        var scan = await scanner.ScanAsync(path, progress: progress);
+
+        progress?.Report(new LoadProgress { Stage = "building_graph" });
         var orchestrator = new CodeGraphAnalysisOrchestrator(DefaultAnalyzers());
         var buildResult = orchestrator.BuildAndAnalyze(scan);
 
+        progress?.Report(new LoadProgress { Stage = "indexing_semantics" });
+        var graphQuery = new GraphQueryService(buildResult.Index);
+        var docBuilder = new SemanticDocBuilder(graphQuery);
+        var docResult = docBuilder.BuildAll();
+
+        var embeddingProvider = new FakeEmbeddingProvider();
+        var vectorStore = new InMemoryVectorStore();
+        var semanticSearch = new SemanticEmbeddingService(embeddingProvider, vectorStore);
+        await semanticSearch.IndexAsync(docResult);
+
+        buildResult = new CodeGraphBuildResult
+        {
+            Graph = buildResult.Graph,
+            Index = buildResult.Index,
+            SymbolIndex = buildResult.SymbolIndex,
+            SemanticDocs = docResult,
+            SemanticSearch = semanticSearch,
+        };
+
+        progress?.Report(new LoadProgress { Stage = "caching" });
         await _cache.SaveAsync(path, buildResult);
 
+        progress?.Report(new LoadProgress { Stage = "complete", IsComplete = true });
         return RepositoryLoadResult.FromScan(buildResult, path);
     }
 

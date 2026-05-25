@@ -8,6 +8,7 @@
 // =============================================================================
 
 using Core.Cognition;
+using Core.Cognition.SemanticDoc;
 using Core.Graph;
 using Core.Graph.Indexing;
 using Core.Grounding.Confidence;
@@ -37,6 +38,7 @@ public sealed class RepositorySession
     public GraphIndex? GraphIndex { get; private set; }
     public SymbolReferenceIndex? SymbolIndex { get; private set; }
     public GraphQueryService? QueryService { get; private set; }
+    public SemanticEmbeddingService? SemanticSearch { get; private set; }
 
     public ConfidencePropagationEngine? ConfidenceEngine { get; private set; }
 
@@ -59,6 +61,7 @@ public sealed class RepositorySession
         GraphIndex = buildResult.Index;
         SymbolIndex = buildResult.SymbolIndex ?? new SymbolReferenceIndex(buildResult.Graph);
         QueryService = new GraphQueryService(GraphIndex);
+        SemanticSearch = buildResult.SemanticSearch;
 
         ConfidenceEngine = new ConfidencePropagationEngine(GraphIndex);
 
