@@ -7,8 +7,8 @@
 **ContextEngine** — Deterministic, grounding-verified semantic runtime for C# code intelligence.
 
 - .NET 9.0, C#, React 18 + Tailwind + Vite frontend
-- Entry: `Program.cs` (3 modes: `dotnet run` for REPL, `--web` for API, `--scan` for legacy)
-- No LLM in core pipeline. LLM only used via `/api/codefix` and `/api/agent`.
+- Entry: `Program.cs` (3 modes: `dotnet run` for REPL, `--mcp --repo <path>` for MCP server, `--web` for API)
+- No LLM in any pipeline. External agents own all LLM calling. ContextEngine is a pure Repository Cognition Server.
 
 ## Architecture Layers (bottom-up)
 
@@ -35,7 +35,7 @@ Core.Scanning → Core.Graph → Core.Semantics / Core.Truth
 | Graph query | `Core/Graph/GraphQueryService.cs` |
 | Cognition engines | `Core/Cognition/` (ArchitectureExplorer, ChangeImpactAnalyzer, BusinessCapabilityMapper, GroundedRootCauseExplorer) |
 | Semantic docs | `Core/Cognition/SemanticDoc/` (SemanticDocBuilder, CodeSummarizer, SemanticEmbeddingService, HybridRetrievalService, ReverseIndex, NoiseTermFilter, RankingRuleSet, RetrievalTrace, NoiseContributionReport, SemanticBenchmarkRunner) |
-| Code fix | `Core/Cognition/CodeFix/` (CodeFixPipeline, SymbolLocator, BuildValidator) |
+| Code fix | `Core/Cognition/CodeFix/` (SymbolLocator, ContextExtractor, PatchGenerator, BuildValidator) |
 | Patching | `Core/Cognition/Patching/` (PatchPlanner, ConventionAnalyzer) |
 | Grounding | `Core/Grounding/` (GroundedClaimValidator, HallucinationBlocker) |
 | Confidence | `Core/Grounding/Confidence/` (ConfidencePropagationEngine, EdgeConfidencePolicy) |
@@ -45,6 +45,7 @@ Core.Scanning → Core.Graph → Core.Semantics / Core.Truth
 | Reasoning UX | `Core/ReasoningUX/` (ReasoningPresentationEngine) |
 | CLI REPL | `App/Cli/CognitionRepl.cs` |
 | Web API | `App/WebApi/WebApiSessionManager.cs`, `WebApiEndpoints.cs` |
+| MCP Server | `App/Mcp/McpServer.cs`, `App/Mcp/ContextEngineMcpTools.cs` |
 | Frontend | `webui/src/App.tsx`, `webui/src/api/client.ts` |
 
 ## Edge Kinds

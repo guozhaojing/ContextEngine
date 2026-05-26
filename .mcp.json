@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "contextengine": {
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--",
+        "--mcp",
+        "--repo",
+        "${workspaceFolder}"
+      ],
+      "cwd": "${workspaceFolder}",
+      "env": {}
+    }
+  }
+}
