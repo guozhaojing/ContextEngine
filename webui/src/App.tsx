@@ -18,47 +18,7 @@ export default function App() {
   const [input, setInput] = useState('')
   const [messages, setMessages] = useState<Message[]>([])
   const [fromCache, setFromCache] = useState(false)
-  // Agent config — load from localStorage
-  const [selectedProvider, setSelectedProvider] = useState(() => localStorage.getItem('ce_provider') || 'openai')
-  const [apiBaseUrl, setApiBaseUrl] = useState('')
-  const [model, setModel] = useState(() => localStorage.getItem('ce_model') || '')
-  const [apiKey, setApiKey] = useState(() => localStorage.getItem('ce_apikey') || '')
-  const [customUrl, setCustomUrl] = useState(() => localStorage.getItem('ce_customUrl') || '')
   const chatRef = useRef<HTMLDivElement>(null)
-
-  const providers = [
-    { id: 'openai', name: 'OpenAI', url: 'https://api.openai.com', models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'o3-mini'] },
-    { id: 'deepseek', name: 'DeepSeek', url: 'https://api.deepseek.com', models: ['deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-chat', 'deepseek-reasoner'] },
-    { id: 'anthropic', name: 'Anthropic', url: 'https://api.anthropic.com', models: ['claude-3-5-sonnet-20241022', 'claude-3-opus-20240229', 'claude-3-haiku-20240307'] },
-    { id: 'ollama', name: 'Ollama (本地)', url: 'http://localhost:11434', models: ['qwen2.5-coder', 'codellama', 'deepseek-coder-v2', 'llama3.1'] },
-    { id: 'zhipu', name: '智谱 GLM', url: 'https://open.bigmodel.cn/api/paas/v4', models: ['glm-4-plus', 'glm-4', 'glm-4-flash'] },
-    { id: 'qwen', name: '通义千问', url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', models: ['qwen-plus', 'qwen-max', 'qwen-coder-plus'] },
-    { id: 'moonshot', name: 'Moonshot', url: 'https://api.moonshot.cn', models: ['moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k'] },
-    { id: 'custom', name: '自定义', url: '', models: [] },
-  ]
-
-  const currentProvider = providers.find(p => p.id === selectedProvider)!
-  const currentModels = selectedProvider === 'custom' ? (model ? [model] : []) : currentProvider.models
-
-  // Persist config to localStorage
-  const persistConfig = (provider: string, m: string, key: string, url: string) => {
-    localStorage.setItem('ce_provider', provider)
-    localStorage.setItem('ce_model', m)
-    localStorage.setItem('ce_apikey', key)
-    localStorage.setItem('ce_customUrl', url)
-  }
-
-  // Sync provider selection to url/model
-  useEffect(() => {
-    if (selectedProvider === 'custom') {
-      setApiBaseUrl(customUrl)
-    } else {
-      setApiBaseUrl(currentProvider.url)
-      const defaultModel = model && currentProvider.models.includes(model) ? model : currentProvider.models[0]
-      setModel(defaultModel)
-      persistConfig(selectedProvider, defaultModel, apiKey, customUrl)
-    }
-  }, [selectedProvider, customUrl])
 
   useEffect(() => { api.getSession().then(setSession) }, [])
   useEffect(() => { api.getHistory().then(setHistory) }, [])
@@ -133,12 +93,7 @@ export default function App() {
     setMessages(prev => [...prev, { role: 'user', content: msg }])
     setLoading(true)
     try {
-      const result = await api.agent(msg, {
-        apiBaseUrl: apiBaseUrl || undefined,
-        model: model || undefined,
-        apiKey: apiKey || undefined,
-        projectPath: session.repositoryPath,
-      })
+      const result = await api.agent(msg)
       setMessages(prev => [...prev, {
         role: 'system',
         content: result.summary || result.title || '',
@@ -223,58 +178,6 @@ export default function App() {
             </>
           )}
 
-          {/* API config — always visible */}
-          <div className="text-[10px] mt-2 border-t border-gray-800 pt-2">
-            <div className="text-gray-500 font-semibold uppercase tracking-wider mb-2">AI 配置</div>
-            <div className="space-y-2 mt-2">
-              <div>
-                <label className="text-gray-500 text-[9px]">厂商</label>
-                <select value={selectedProvider} onChange={e => {
-                  const p = e.target.value; setSelectedProvider(p)
-                }}
-                  className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-gray-200 text-[10px] focus:outline-none focus:border-blue-500">
-                  {providers.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                </select>
-              </div>
-
-              {selectedProvider === 'custom' && (
-                <div>
-                  <label className="text-gray-500 text-[9px]">API 地址</label>
-                  <input value={customUrl} onChange={e => { setCustomUrl(e.target.value); persistConfig(selectedProvider, model, apiKey, e.target.value) }}
-                    placeholder="https://api.example.com" className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-gray-200 placeholder-gray-600 text-[10px] focus:outline-none focus:border-blue-500" />
-                </div>
-              )}
-
-              <div>
-                <label className="text-gray-500 text-[9px]">模型</label>
-                {selectedProvider === 'custom' ? (
-                  <input value={model} onChange={e => { setModel(e.target.value); persistConfig(selectedProvider, e.target.value, apiKey, customUrl) }}
-                    placeholder="输入模型名" className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-gray-200 placeholder-gray-600 text-[10px] focus:outline-none focus:border-blue-500" />
-                ) : (
-                  <select value={model} onChange={e => { setModel(e.target.value); persistConfig(selectedProvider, e.target.value, apiKey, customUrl) }}
-                    className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-gray-200 text-[10px] focus:outline-none focus:border-blue-500">
-                    {currentModels.map(m => <option key={m} value={m}>{m}</option>)}
-                  </select>
-                )}
-              </div>
-
-              <div>
-                <label className="text-gray-500 text-[9px]">API Key</label>
-                <input value={apiKey} onChange={e => { setApiKey(e.target.value); persistConfig(selectedProvider, model, e.target.value, customUrl) }} type="password"
-                  placeholder={selectedProvider === 'ollama' ? '本地无需 Key' : 'sk-...'}
-                  className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-gray-200 placeholder-gray-600 text-[10px] focus:outline-none focus:border-blue-500" />
-              </div>
-
-              {selectedProvider !== 'ollama' && selectedProvider !== 'custom' && (
-                <div className="text-gray-600 text-[9px] leading-relaxed">
-                  使用 {currentProvider.name} 兼容 API。Key 仅存在浏览器内存，不会上传到本程序服务器。
-                </div>
-              )}
-              {selectedProvider === 'ollama' && (
-                <div className="text-gray-600 text-[9px]">本地 Ollama，无需 Key。确保已运行 <code className="text-gray-500">ollama serve</code></div>
-              )}
-            </div>
-          </div>
         </aside>
 
         {/* Main chat */}
@@ -319,18 +222,12 @@ export default function App() {
           <form onSubmit={handleSend} className="border-t border-gray-800 p-3 bg-gray-900 space-y-2">
             <input value={input} onChange={e => setInput(e.target.value)}
               placeholder={session?.isLoaded
-                ? (apiKey ? '输入认知查询 或 代码修改请求（如"修改 XX 方法加参数校验"）'
-                   : '输入问题（配置 AI Key 后支持代码修改）')
+                ? '输入认知查询，如"解释架构"、"改动 RetryPolicy 影响"...'
                 : "先加载仓库"}
               disabled={!session?.isLoaded}
               className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500 disabled:opacity-50" />
-            <div className="flex items-center gap-2">
-              <button type="submit" disabled={loading || !session?.isLoaded}
-                className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm rounded px-4 py-1.5 transition flex-1">发送</button>
-              <span className={`text-[10px] ${apiKey ? 'text-green-400' : 'text-yellow-500'}`}>
-                {apiKey ? `🤖 ${providers.find(p=>p.id===selectedProvider)?.name} ${model}` : '⚠ 未配置 API Key（仅查询）'}
-              </span>
-            </div>
+            <button type="submit" disabled={loading || !session?.isLoaded}
+              className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm rounded px-4 py-1.5 transition">发送</button>
           </form>
         </main>
 

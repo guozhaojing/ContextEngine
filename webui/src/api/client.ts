@@ -29,8 +29,8 @@ export async function getEvidence(nodeId: string) {
   return res.json()
 }
 
-// Unified agent — single endpoint for everything
-export async function agent(message: string, config?: { apiBaseUrl?: string; model?: string; apiKey?: string; projectPath?: string }) {
-  const res = await fetch(`${BASE}/agent`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message, ...config }) })
+// Unified agent — single endpoint for cognition queries
+export async function agent(message: string) {
+  const res = await fetch(`${BASE}/agent`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message }) })
   return res.json()
 }

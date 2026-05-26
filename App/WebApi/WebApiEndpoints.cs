@@ -7,7 +7,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using App.Mcp;
-using Core.Cognition.CodeFix;
 using Core.Experience;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -64,24 +63,24 @@ public static class WebApiEndpoints
         // ── Unified Agent → delegates to ContextEngineMcpTools ──
         app.MapPost("/api/agent", async (HttpRequest httpReq) =>
         {
-            var req = await httpReq.ReadFromJsonAsync<AgentRequest>(JsonOptions);
-            if (req is null || string.IsNullOrWhiteSpace(req.Message))
-                return Results.BadRequest(new { error = "输入不能为空" });
-            if (!sessionManager.IsLoaded)
-                return Results.BadRequest(new { error = "请先加载仓库" });
+            try
+            {
+                var req = await httpReq.ReadFromJsonAsync<AgentRequest>(JsonOptions);
+                if (req is null || string.IsNullOrWhiteSpace(req.Message))
+                    return Results.BadRequest(new { error = "输入不能为空" });
+                if (!sessionManager.IsLoaded)
+                    return Results.BadRequest(new { error = "请先加载仓库" });
 
-            var msg = req.Message.Trim();
-            var intent = DetectIntent(msg);
+                var tools = GetTools(sessionManager);
+                if (tools is null) return Results.BadRequest(new { error = "会话未就绪" });
 
-            if (intent == AgentIntent.CodeFix && !string.IsNullOrWhiteSpace(req.ApiKey))
-                return await HandleCodeFix(sessionManager, msg, req);
-
-            // Cognition query — delegate to MCP tools layer
-            var tools = GetTools(sessionManager);
-            if (tools is null) return Results.BadRequest(new { error = "会话未就绪" });
-
-            var result = tools.Ask(msg);
-            return Results.Json(result, JsonOptions);
+                var result = tools.Ask(req.Message.Trim());
+                return Results.Json(result, JsonOptions);
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { error = ex.GetType().Name, message = ex.Message, stackTrace = ex.StackTrace }, JsonOptions, statusCode: 500);
+            }
         });
 
         // ── Cognition endpoints (unified through MCP tools layer) ──
@@ -176,74 +175,18 @@ public static class WebApiEndpoints
                 calleeCount = sessionManager.Session.QueryService.GetCallees(nodeId).Count,
             }, JsonOptions);
         });
+
     }
 
-    // ── Agent helpers ──
+    // ── Request types ──
 
-    private static AgentIntent DetectIntent(string msg)
+    public sealed class AgentRequest
     {
-        var lower = msg.ToLowerInvariant();
-        if (lower.Contains("修改") || lower.Contains("修复") || lower.Contains("加") && lower.Contains("代码")
-            || lower.Contains("改成") || lower.Contains("增加") || lower.Contains("fix") || lower.Contains("patch")
-            || lower.Contains("实现") || lower.Contains("改"))
-            return AgentIntent.CodeFix;
-        return AgentIntent.Query;
+        public string Message { get; set; } = "";
     }
 
-    private static async Task<IResult> HandleCodeFix(WebApiSessionManager sessionManager, string msg, AgentRequest req)
-    {
-        // Extract method name from message (first PascalCase word)
-        var words = msg.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        var methodName = words.FirstOrDefault(w => w.Length > 2 && char.IsUpper(w[0]) && !w.Contains("修改", StringComparison.Ordinal) && !w.Contains("修复", StringComparison.Ordinal))
-            ?? words.LastOrDefault(w => w.Length > 2);
-
-        var llmConfig = new LlmConfig
-        {
-            BaseUrl = req.ApiBaseUrl ?? "https://api.openai.com",
-            Model = req.Model ?? "gpt-4o",
-            ApiKey = req.ApiKey ?? "",
-        };
-
-        var llmProvider = new LlmProvider(llmConfig);
-        var pipeline = new CodeFixPipeline(sessionManager.Session!.QueryService!,
-            new PipelineOptions { ProjectPath = req.ProjectPath ?? sessionManager.CurrentPath },
-            sessionManager.Session.SemanticSearch);
-
-        var request = new CodeFixRequest
-        {
-            Query = methodName ?? msg,
-            Task = msg,
-            TargetMethodName = methodName,
-            RepositoryPath = req.ProjectPath ?? sessionManager.CurrentPath,
-            MaxRetries = 2,
-        };
-
-        var result = await pipeline.ExecuteAsync(request, llmProvider.GenerateAsync);
-        return Results.Json(new
-        {
-            type = "codefix",
-            success = result.Success,
-            attempts = result.Attempts,
-            summary = result.Summary,
-            repairHistory = result.RepairHistory,
-            patches = result.Patches.Select(p => new { p.FilePath, p.ChangeDescription, diff = p.Diff }),
-            buildErrors = result.FinalBuild?.Errors.Select(e => $"{e.Code}: {e.Message}"),
-        }, JsonOptions);
-    }
+    public sealed class LoadRequest { public string Path { get; set; } = ""; public bool ForceReload { get; set; } }
+    public sealed class QueryRequest { public string Question { get; set; } = ""; }
+    public sealed class PatchRequest { public string Request { get; set; } = ""; }
+    public sealed class HistoryDeleteRequest { public string Path { get; set; } = ""; }
 }
-
-public enum AgentIntent { Query = 0, CodeFix = 1 }
-
-public sealed class AgentRequest
-{
-    public string Message { get; set; } = "";
-    public string? ApiBaseUrl { get; set; }
-    public string? Model { get; set; }
-    public string? ApiKey { get; set; }
-    public string? ProjectPath { get; set; }
-}
-
-public sealed class LoadRequest { public string Path { get; set; } = ""; public bool ForceReload { get; set; } }
-public sealed class QueryRequest { public string Question { get; set; } = ""; }
-public sealed class PatchRequest { public string Request { get; set; } = ""; }
-public sealed class HistoryDeleteRequest { public string Path { get; set; } = ""; }

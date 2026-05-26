@@ -144,7 +144,7 @@ public sealed class SymbolLocator
         return node is not null ? BuildSymbol(node) : null;
     }
 
-    private LocatedSymbol? BuildSymbol(GraphNode node)
+    public LocatedSymbol? BuildSymbol(GraphNode node)
     {
         if (string.IsNullOrEmpty(node.SourceFile) || !File.Exists(node.SourceFile))
             return null;

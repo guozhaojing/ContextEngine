@@ -1,11 +1,10 @@
 // =============================================================================
 // Cognition/CodeFix/PatchGenerator.cs — generate and validate patches
 // =============================================================================
-// Constraints enforced:
-//   - Only modify method body
-//   - No public API / signature / config / DI changes
-//   - Only generate patch/diff, no auto-commit
+// v2: supports ModifyExisting (line-range replace) and CreateNewFile (new .cs file).
 // =============================================================================
+
+using System.Text.RegularExpressions;
 
 namespace Core.Cognition.CodeFix;
 
@@ -18,9 +17,52 @@ public sealed class PatchGenerator
         _options = options ?? PatchOptions.Default;
     }
 
+    /// <summary>Detect whether LLM output is a new file or method modification.</summary>
+    public static PatchKind DetectKind(string llmOutput)
+    {
+        var trimmed = llmOutput.Trim();
+        // Check for full file pattern: namespace/using + class declaration
+        var hasNamespace = trimmed.Contains("namespace ", StringComparison.Ordinal);
+        var hasClass = Regex.IsMatch(trimmed, @"\bclass\s+\w+", RegexOptions.None, TimeSpan.FromSeconds(1));
+        var hasUsing = trimmed.StartsWith("using ", StringComparison.Ordinal);
+
+        if ((hasNamespace || hasUsing) && hasClass)
+            return PatchKind.CreateNewFile;
+        return PatchKind.ModifyExisting;
+    }
+
+    /// <summary>Extract class name from new file content.</summary>
+    public static string? ExtractClassName(string code)
+    {
+        var match = Regex.Match(code, @"\bclass\s+(\w+)", RegexOptions.None, TimeSpan.FromSeconds(1));
+        return match.Success ? match.Groups[1].Value : null;
+    }
+
+    /// <summary>Infer a conventional file path for a new class relative to project root.</summary>
+    public static string InferFilePath(string className, string projectDir)
+    {
+        var dir = "Helpers";
+        if (className.EndsWith("Controller", StringComparison.Ordinal)) dir = "Controllers";
+        else if (className.EndsWith("Service", StringComparison.Ordinal)) dir = "Services";
+        else if (className.EndsWith("Repository", StringComparison.Ordinal)) dir = "Repositories";
+        else if (className.EndsWith("Middleware", StringComparison.Ordinal) || className.Contains("Middleware")) dir = "Middleware";
+        else if (className.EndsWith("Filter", StringComparison.Ordinal) || className.EndsWith("Attribute", StringComparison.Ordinal)) dir = "Filters";
+        else if (className.EndsWith("Extension", StringComparison.Ordinal) || className.Contains("Extensions")) dir = "Extensions";
+        else if (className.EndsWith("Model", StringComparison.Ordinal) || className.EndsWith("Dto", StringComparison.Ordinal) || className.EndsWith("DTO", StringComparison.Ordinal)) dir = "Models";
+        else if (className.EndsWith("Exception", StringComparison.Ordinal)) dir = "Exceptions";
+        else if (className.EndsWith("Validator", StringComparison.Ordinal)) dir = "Validators";
+        else if (className.EndsWith("Mapper", StringComparison.Ordinal) || className.EndsWith("Converter", StringComparison.Ordinal)) dir = "Mappers";
+        else if (className.EndsWith("Handler", StringComparison.Ordinal)) dir = "Handlers";
+        else if (className.EndsWith("Provider", StringComparison.Ordinal)) dir = "Providers";
+        else if (className.EndsWith("Options", StringComparison.Ordinal) || className.EndsWith("Config", StringComparison.Ordinal) || className.EndsWith("Configuration", StringComparison.Ordinal)) dir = "Config";
+
+        var subDir = Path.Combine(projectDir, dir);
+        return Path.Combine(subDir, $"{className}.cs");
+    }
+
     public GeneratedPatch CreatePatch(LocatedSymbol target, string newMethodBody, string? description = null)
     {
-        var patch = new GeneratedPatch
+        return new GeneratedPatch
         {
             PatchId = $"patch-{DateTime.UtcNow:HHmmss}",
             FilePath = target.SourceFilePath,
@@ -29,13 +71,33 @@ public sealed class PatchGenerator
             ChangeDescription = description ?? $"Modified {target.MethodName} in {target.ClassName}",
             LineStart = target.MethodStartLine,
             LineEnd = target.MethodEndLine,
+            Kind = PatchKind.ModifyExisting,
         };
-
-        return patch;
     }
 
-    public PatchValidationResult Validate(GeneratedPatch patch, LocatedSymbol target)
+    public GeneratedPatch CreateNewFilePatch(string code, string projectDir, string? description = null)
     {
+        var className = ExtractClassName(code) ?? "NewClass";
+        var filePath = InferFilePath(className, projectDir);
+
+        return new GeneratedPatch
+        {
+            PatchId = $"newfile-{DateTime.UtcNow:HHmmss}",
+            FilePath = filePath,
+            OriginalCode = "",
+            ModifiedCode = code,
+            ChangeDescription = description ?? $"Create new file: {className}.cs",
+            LineStart = 0,
+            LineEnd = 0,
+            Kind = PatchKind.CreateNewFile,
+        };
+    }
+
+    public PatchValidationResult Validate(GeneratedPatch patch, LocatedSymbol? target)
+    {
+        if (patch.Kind == PatchKind.CreateNewFile)
+            return ValidateNewFile(patch);
+
         var violations = new List<string>();
 
         // 1. No public API modification
@@ -78,8 +140,31 @@ public sealed class PatchGenerator
         };
     }
 
+    private static PatchValidationResult ValidateNewFile(GeneratedPatch patch)
+    {
+        var violations = new List<string>();
+
+        if (string.IsNullOrWhiteSpace(patch.ModifiedCode))
+            violations.Add("REJECTED: Generated code is empty.");
+
+        if (File.Exists(patch.FilePath))
+            violations.Add("WARNING: File already exists, will be overwritten.");
+
+        return new PatchValidationResult
+        {
+            IsValid = !violations.Any(v => v.StartsWith("REJECTED", StringComparison.Ordinal)),
+            Violations = violations,
+        };
+    }
+
     public void ApplyPatch(GeneratedPatch patch)
     {
+        if (patch.Kind == PatchKind.CreateNewFile)
+        {
+            ApplyNewFile(patch);
+            return;
+        }
+
         if (!File.Exists(patch.FilePath))
             throw new FileNotFoundException($"Source file not found: {patch.FilePath}");
 
@@ -97,8 +182,24 @@ public sealed class PatchGenerator
         File.WriteAllText(patch.FilePath, string.Join("\n", allLines));
     }
 
+    private static void ApplyNewFile(GeneratedPatch patch)
+    {
+        var dir = Path.GetDirectoryName(patch.FilePath);
+        if (dir is not null && !Directory.Exists(dir))
+            Directory.CreateDirectory(dir);
+
+        File.WriteAllText(patch.FilePath, patch.ModifiedCode);
+    }
+
     public void RevertPatch(GeneratedPatch patch)
     {
+        if (patch.Kind == PatchKind.CreateNewFile)
+        {
+            if (File.Exists(patch.FilePath))
+                File.Delete(patch.FilePath);
+            return;
+        }
+
         if (!File.Exists(patch.FilePath)) return;
 
         var allLines = File.ReadAllLines(patch.FilePath).ToList();

@@ -60,6 +60,8 @@ public sealed class CalleeContext
     public string Summary { get; init; } = "";
 }
 
+public enum PatchKind { ModifyExisting, CreateNewFile }
+
 public sealed class GeneratedPatch
 {
     public required string PatchId { get; init; }
@@ -69,10 +71,14 @@ public sealed class GeneratedPatch
     public string ChangeDescription { get; init; } = "";
     public int LineStart { get; init; }
     public int LineEnd { get; init; }
-    public string Diff => GenerateDiff(OriginalCode, ModifiedCode);
+    public PatchKind Kind { get; init; }
+    public string Diff => Kind == PatchKind.CreateNewFile
+        ? GenerateNewFileDiff(ModifiedCode)
+        : GenerateDiff(OriginalCode, ModifiedCode);
 
-    public bool IsValid => !string.IsNullOrWhiteSpace(ModifiedCode)
-        && ModifiedCode != OriginalCode;
+    public bool IsValid => Kind == PatchKind.CreateNewFile
+        ? !string.IsNullOrWhiteSpace(ModifiedCode)
+        : !string.IsNullOrWhiteSpace(ModifiedCode) && ModifiedCode != OriginalCode;
 
     private static string GenerateDiff(string original, string modified)
     {
@@ -82,6 +88,16 @@ public sealed class GeneratedPatch
         foreach (var line in original.Split('\n'))
             sb.AppendLine($"-{line.TrimEnd('\r')}");
         foreach (var line in modified.Split('\n'))
+            sb.AppendLine($"+{line.TrimEnd('\r')}");
+        return sb.ToString();
+    }
+
+    private static string GenerateNewFileDiff(string content)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"--- /dev/null");
+        sb.AppendLine($"+++ new file");
+        foreach (var line in content.Split('\n'))
             sb.AppendLine($"+{line.TrimEnd('\r')}");
         return sb.ToString();
     }

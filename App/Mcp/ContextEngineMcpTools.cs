@@ -2,6 +2,7 @@ using System.Text.Json;
 using Core.Cognition;
 using Core.Cognition.Epistemics;
 using Core.Cognition.Patching;
+using Cfix = Core.Cognition.CodeFix;
 using Core.Experience;
 using Core.Graph;
 using Core.Graph.Indexing;
@@ -48,6 +49,12 @@ public sealed class ContextEngineMcpTools
             "ce_self_critique" => SelfCritique(args),
             "ce_epistemic_boundary" => EpistemicBoundary(args),
             "ce_patch" => Patch(args),
+            "ce_locate_symbol" => LocateSymbol(args),
+            "ce_extract_context" => ExtractContext(args),
+            "ce_validate_patch" => ValidatePatch(args),
+            "ce_apply_patch" => ApplyPatch(args),
+            "ce_revert_patch" => RevertPatch(args),
+            "ce_build" => Build(args),
             _ => throw new KeyNotFoundException($"Unknown tool: {name}"),
         };
     }
@@ -497,6 +504,231 @@ public sealed class ContextEngineMcpTools
     private object Patch(Dictionary<string, JsonElement> args)
         => Patch(GetStringArg(args, "request"));
 
+    // ── Code-fix building block tools (for external agents) ──
+
+    private object LocateSymbol(Dictionary<string, JsonElement> args)
+    {
+        var query = GetStringArg(args, "query");
+        var targetMethodName = GetOptionalStringArg(args, "targetMethodName");
+        var targetFilePath = GetOptionalStringArg(args, "targetFilePath");
+
+        var locator = new Cfix.SymbolLocator(_query, _session?.SemanticSearch);
+        var request = new Cfix.CodeFixRequest
+        {
+            Query = query,
+            Task = query,
+            TargetMethodName = targetMethodName ?? query,
+            TargetFilePath = targetFilePath,
+        };
+        var symbols = locator.Locate(request);
+
+        return new
+        {
+            total = symbols.Count,
+            symbols = symbols.Take(10).Select(s => new
+            {
+                nodeId = s.NodeId,
+                methodName = s.MethodName,
+                className = s.ClassName,
+                namespaceName = s.Namespace,
+                sourceFilePath = s.SourceFilePath,
+                methodStartLine = s.MethodStartLine,
+                methodEndLine = s.MethodEndLine,
+                methodBody = s.MethodBody,
+                fullSignature = s.FullSignature,
+                isPrivate = s.IsPrivate,
+                isPublicApi = s.IsPublicApi,
+                parameterTypes = s.ParameterTypes,
+                callees = s.Callees.Select(c => new { c.MethodName, c.FullSignature, c.SourceFilePath }),
+                callers = s.Callers.Select(c => new { c.MethodName, c.FullSignature, c.SourceFilePath }),
+            }).ToList(),
+        };
+    }
+
+    private object ExtractContext(Dictionary<string, JsonElement> args)
+    {
+        var nodeId = GetStringArg(args, "nodeId");
+        var node = _query.GetNode(nodeId);
+        if (node is null)
+            return new { error = $"Node not found: {nodeId}" };
+        var locator = new Cfix.SymbolLocator(_query);
+        var symbol = locator.BuildSymbol(node);
+        if (symbol is null)
+            return new { error = $"Cannot build symbol from node: {nodeId}" };
+
+        var extractor = new Cfix.ContextExtractor();
+        var context = extractor.Extract(symbol);
+        var formatted = extractor.FormatForLLM(context);
+
+        return new
+        {
+            nodeId,
+            context = formatted,
+            targetMethodBody = context.TargetMethodBody,
+            targetSignature = context.TargetSignature,
+            targetClassName = context.TargetClassName,
+            targetNamespace = context.TargetNamespace,
+            targetFileName = context.TargetFileName,
+            usingDirectives = context.UsingDirectives,
+            interfaceMethods = context.InterfaceMethods,
+            relatedMethods = context.RelatedMethods.Select(c => new { c.MethodName, c.Signature, c.Summary }),
+        };
+    }
+
+    private object ValidatePatch(Dictionary<string, JsonElement> args)
+    {
+        var filePath = GetStringArg(args, "filePath");
+        var originalCode = GetStringArg(args, "originalCode");
+        var modifiedCode = GetStringArg(args, "modifiedCode");
+        var lineStart = GetOptionalIntArg(args, "lineStart", 0);
+        var lineEnd = GetOptionalIntArg(args, "lineEnd", 0);
+        var description = GetOptionalStringArg(args, "changeDescription", "Patch");
+        var kindStr = GetOptionalStringArg(args, "kind", "ModifyExisting");
+        var nodeId = GetOptionalStringArg(args, "nodeId");
+
+        var kind = kindStr == "CreateNewFile" ? Cfix.PatchKind.CreateNewFile : Cfix.PatchKind.ModifyExisting;
+
+        var patch = new Cfix.GeneratedPatch
+        {
+            PatchId = $"validate-{DateTime.UtcNow:HHmmss}",
+            FilePath = filePath,
+            OriginalCode = originalCode,
+            ModifiedCode = modifiedCode,
+            ChangeDescription = description,
+            LineStart = lineStart,
+            LineEnd = lineEnd,
+            Kind = kind,
+        };
+
+        var generator = new Cfix.PatchGenerator();
+        Cfix.LocatedSymbol? target = null;
+        if (nodeId is not null)
+        {
+            var targetNode = _query.GetNode(nodeId);
+            if (targetNode is not null)
+            {
+                var locator = new Cfix.SymbolLocator(_query);
+                target = locator.BuildSymbol(targetNode);
+            }
+        }
+
+        var result = generator.Validate(patch, target);
+        return new
+        {
+            isValid = result.IsValid,
+            violations = result.Violations,
+        };
+    }
+    private object ApplyPatch(Dictionary<string, JsonElement> args)
+    {
+        var filePath = GetStringArg(args, "filePath");
+        var originalCode = GetStringArg(args, "originalCode");
+        var modifiedCode = GetStringArg(args, "modifiedCode");
+        var lineStart = GetOptionalIntArg(args, "lineStart", 0);
+        var lineEnd = GetOptionalIntArg(args, "lineEnd", 0);
+        var description = GetOptionalStringArg(args, "changeDescription", "Patch");
+        var kindStr = GetOptionalStringArg(args, "kind", "ModifyExisting");
+        var projectDir = GetOptionalStringArg(args, "projectDir");
+
+        var kind = kindStr == "CreateNewFile" ? Cfix.PatchKind.CreateNewFile : Cfix.PatchKind.ModifyExisting;
+
+        var generator = new Cfix.PatchGenerator();
+        Cfix.GeneratedPatch patch;
+        if (kind == Cfix.PatchKind.CreateNewFile)
+        {
+            var dir = projectDir ?? Path.GetDirectoryName(filePath) ?? ".";
+            patch = generator.CreateNewFilePatch(modifiedCode, dir, description);
+        }
+        else
+        {
+            patch = new Cfix.GeneratedPatch
+            {
+                PatchId = $"apply-{DateTime.UtcNow:HHmmss}",
+                FilePath = filePath,
+                OriginalCode = originalCode,
+                ModifiedCode = modifiedCode,
+                ChangeDescription = description,
+                LineStart = lineStart,
+                LineEnd = lineEnd,
+                Kind = kind,
+            };
+        }
+
+        try
+        {
+            generator.ApplyPatch(patch);
+            return new { applied = true, filePath = patch.FilePath, patchId = patch.PatchId, kind = patch.Kind.ToString() };
+        }
+        catch (Exception ex)
+        {
+            return new { applied = false, error = ex.Message };
+        }
+    }
+
+    private object RevertPatch(Dictionary<string, JsonElement> args)
+    {
+        var filePath = GetStringArg(args, "filePath");
+        var originalCode = GetStringArg(args, "originalCode");
+        var modifiedCode = GetStringArg(args, "modifiedCode");
+        var lineStart = GetOptionalIntArg(args, "lineStart", 0);
+        var lineEnd = GetOptionalIntArg(args, "lineEnd", 0);
+        var description = GetOptionalStringArg(args, "changeDescription", "Patch");
+        var kindStr = GetOptionalStringArg(args, "kind", "ModifyExisting");
+
+        var kind = kindStr == "CreateNewFile" ? Cfix.PatchKind.CreateNewFile : Cfix.PatchKind.ModifyExisting;
+
+        var patch = new Cfix.GeneratedPatch
+        {
+            PatchId = $"revert-{DateTime.UtcNow:HHmmss}",
+            FilePath = filePath,
+            OriginalCode = originalCode,
+            ModifiedCode = modifiedCode,
+            ChangeDescription = description,
+            LineStart = lineStart,
+            LineEnd = lineEnd,
+            Kind = kind,
+        };
+
+        try
+        {
+            var generator = new Cfix.PatchGenerator();
+            generator.RevertPatch(patch);
+            return new { reverted = true, filePath, kind = patch.Kind.ToString() };
+        }
+        catch (Exception ex)
+        {
+            return new { reverted = false, error = ex.Message };
+        }
+    }
+
+    private async Task<object> BuildAsync(Dictionary<string, JsonElement> args)
+    {
+        var projectPath = GetStringArg(args, "projectPath");
+
+        var validator = new Cfix.BuildValidator();
+        var result = await validator.BuildAsync(projectPath);
+
+        return new
+        {
+            success = result.Success,
+            exitCode = result.ExitCode,
+            durationMs = result.DurationMs,
+            errors = result.Errors.Select(e => new
+            {
+                e.Code,
+                e.Message,
+                e.FilePath,
+                e.Line,
+                e.Column,
+                e.IsError,
+                context = e.ToContextString(),
+            }).ToList(),
+            warnings = result.Warnings,
+        };
+    }
+    private object Build(Dictionary<string, JsonElement> args)
+        => BuildAsync(args).GetAwaiter().GetResult();
+
     // ── Helpers ──
 
     private void EnsureSession()
@@ -677,6 +909,70 @@ public sealed class ContextEngineMcpTools
             Parameters =
             {
                 new("request", "string", true, "Natural language modification request, e.g. '给 PaymentService 添加重试逻辑' or '为 UserController 增加日志'"),
+            },
+        },
+        new("ce_locate_symbol", "Locate target methods/symbols in the code graph by natural language query. Uses semantic search with keyword fallback. Returns LocatedSymbol objects with full method body, signature, source location, and caller/callee info.")
+        {
+            Parameters =
+            {
+                new("query", "string", true, "Natural language description of what to find, e.g. '支付重试逻辑' or 'authentication middleware'"),
+                new("targetMethodName", "string", false, "Exact method name if known"),
+                new("targetFilePath", "string", false, "File path to narrow search"),
+            },
+        },
+        new("ce_extract_context", "Extract minimal necessary context for a method: using directives, interface contracts, related methods, and the full method body. Formatted for LLM consumption. Use this after ce_locate_symbol to get the context needed for code generation.")
+        {
+            Parameters =
+            {
+                new("nodeId", "string", true, "Node ID returned by ce_locate_symbol"),
+            },
+        },
+        new("ce_validate_patch", "Validate a code patch before applying: check signature preservation, public API safety, config/DI tampering detection. Use this before ce_apply_patch to catch issues early.")
+        {
+            Parameters =
+            {
+                new("filePath", "string", true, "Target source file path"),
+                new("originalCode", "string", true, "Original method body or empty for new files"),
+                new("modifiedCode", "string", true, "Modified code to validate"),
+                new("lineStart", "number", false, "Start line of original method (0 for new files)"),
+                new("lineEnd", "number", false, "End line of original method (0 for new files)"),
+                new("changeDescription", "string", false, "Description of the change"),
+                new("kind", "string", false, "Patch kind: ModifyExisting (default) or CreateNewFile"),
+                new("nodeId", "string", false, "Node ID for signature validation (optional)"),
+            },
+        },
+        new("ce_apply_patch", "Apply a validated patch to disk. For ModifyExisting: replaces line range in source file. For CreateNewFile: creates a new .cs file in the appropriate directory. Use ce_revert_patch to undo.")
+        {
+            Parameters =
+            {
+                new("filePath", "string", true, "Target source file path"),
+                new("originalCode", "string", true, "Original method body (empty for new files)"),
+                new("modifiedCode", "string", true, "Modified code to write"),
+                new("lineStart", "number", false, "Start line of original method (0 for new files)"),
+                new("lineEnd", "number", false, "End line of original method (0 for new files)"),
+                new("changeDescription", "string", false, "Description of the change"),
+                new("kind", "string", false, "Patch kind: ModifyExisting (default) or CreateNewFile"),
+                new("projectDir", "string", false, "Project root directory (for CreateNewFile file placement)"),
+            },
+        },
+        new("ce_revert_patch", "Revert a previously applied patch. For ModifyExisting: restores original lines. For CreateNewFile: deletes the created file.")
+        {
+            Parameters =
+            {
+                new("filePath", "string", true, "Target source file path"),
+                new("originalCode", "string", true, "Original code to restore"),
+                new("modifiedCode", "string", true, "Modified code that was applied"),
+                new("lineStart", "number", false, "Start line of original method"),
+                new("lineEnd", "number", false, "End line of original method"),
+                new("changeDescription", "string", false, "Description of the change"),
+                new("kind", "string", false, "Patch kind: ModifyExisting (default) or CreateNewFile"),
+            },
+        },
+        new("ce_build", "Build (compile) a project and return errors/warnings. Use this after applying patches to verify the changes compile correctly.")
+        {
+            Parameters =
+            {
+                new("projectPath", "string", true, "Path to the .csproj or solution directory to build"),
             },
         },
     };
